@@ -872,7 +872,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
     // that would make it usable.
     assert.equal(await oxFamily.getByRole("button", { name: /^Connect / }).count(), 4);
     const columns = await oxFamily.locator(".pm-route-head > span").allTextContents();
-    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Thinking"]);
+    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Reasoning effort"]);
     await modelSearch.fill("");
 
     // Adding reads every connected provider's catalog at once. Only a provider
