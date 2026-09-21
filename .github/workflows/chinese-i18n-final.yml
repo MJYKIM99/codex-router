@@ -19,43 +19,40 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          path: workbench
-          persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          ref: e49195e1bd3327fb350106ea9eaf6da081f7c74a
+          ref: c31e77b6b31b6724265abec9d58c549c562c5867
           fetch-depth: 0
-          path: source
-      - name: Reproduce the reviewed correction and verify its exact tree
+      - name: Verify the current upstream merge before publishing the fork candidate
         id: publish
-        working-directory: source
         shell: bash
         run: |
           set -euo pipefail
           git config core.hooksPath /dev/null
-          python3 ../workbench/.github/i18n-final/dates.py
-          git add -A
-          test "$(git write-tree)" = c5369f814905ec2cc02a785550f21af381ffcef6
-          cat > ../reviewed.commit <<'COMMIT'
-          tree c5369f814905ec2cc02a785550f21af381ffcef6
-          parent e49195e1bd3327fb350106ea9eaf6da081f7c74a
-          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022352 +0000
-          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022352 +0000
+          git config user.name 'Kim Ma'
+          git config user.email '141823112+MJYKIM99@users.noreply.github.com'
+          git fetch https://github.com/duolahypercho/codex-router.git bf55dec27702e678730e27b9b3597eb4b1c74539
+          git merge --no-ff --no-commit bf55dec27702e678730e27b9b3597eb4b1c74539
+          test "$(git write-tree)" = 2aa08d07b30095f3a6c4186d90c33e080e4d7201
+          cat > "$RUNNER_TEMP/reviewed.commit" <<'COMMIT'
+          tree 2aa08d07b30095f3a6c4186d90c33e080e4d7201
+          parent c31e77b6b31b6724265abec9d58c549c562c5867
+          parent bf55dec27702e678730e27b9b3597eb4b1c74539
+          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022809 +0000
+          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022809 +0000
 
-          fix(i18n): localize chart dates and preserve native wording semantics
+          merge: reconcile the current upstream routing fixes with Chinese UI integration
 
-          Pass the active translator through daily/hourly chart labels, date captions and currency formatting without altering UTC bucket keys or numeric accounting. Correct apply-versus-application wording in Traditional native copy. Scope browser actions to the endpoint menu and assert the initialized catalog filter.
+          Integrate upstream bf55dec after the four newly merged backend fixes. The 23 upstream paths do not intersect the 83 localization paths; preserve both trees byte-for-byte rather than modifying routing behavior in the localization work. Final cross-platform validation runs on this combined tree.
           COMMIT
-          target=$(git hash-object -t commit -w ../reviewed.commit)
-          test "$target" = c31e77b6b31b6724265abec9d58c549c562c5867
-          for parent in 54e8f702f089399df94f305c244abc9f8722c168 f0811d80c18a7d33324ce74d468a76ac6180c5d3 d795cb9bad4a6dbc08662b6608cadbcc8f312f00 70f9b2a096e5c19d502c088ec5c0247308c8372d; do
+          target=$(git hash-object -t commit -w "$RUNNER_TEMP/reviewed.commit")
+          test "$target" = aeeff5a3a59b08f1b14f1ded2c736a7ccd044caf
+          for parent in bf55dec27702e678730e27b9b3597eb4b1c74539 f0811d80c18a7d33324ce74d468a76ac6180c5d3 d795cb9bad4a6dbc08662b6608cadbcc8f312f00 70f9b2a096e5c19d502c088ec5c0247308c8372d; do
             git merge-base --is-ancestor "$parent" "$target"
           done
-          git diff --exit-code 54e8f702f089399df94f305c244abc9f8722c168 "$target" -- .github package.json package-lock.json apps/control-center/package.json apps/control-center/package-lock.json
-          git diff --check 54e8f702f089399df94f305c244abc9f8722c168 "$target"
+          git diff --exit-code bf55dec27702e678730e27b9b3597eb4b1c74539 "$target" -- .github package.json package-lock.json apps/control-center/package.json apps/control-center/package-lock.json
+          git diff --check bf55dec27702e678730e27b9b3597eb4b1c74539 "$target"
           git push origin "$target:refs/heads/codex/chinese-i18n-candidate-v2"
           echo "sha=$target" >> "$GITHUB_OUTPUT"
-          printf 'Candidate %s; tree %s\n' "$target" "$(git rev-parse "$target^{tree}")" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Candidate %s; tree %s; upstream bf55dec\n' "$target" "$(git rev-parse "$target^{tree}")" >> "$GITHUB_STEP_SUMMARY"
 
   root:
     needs: publish-candidate
