@@ -8,49 +8,183 @@ permissions:
   contents: read
 
 jobs:
-  export-inputs:
+  publish-candidate:
     if: github.repository == 'MJYKIM99/codex-router'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          path: workbench
+          persist-credentials: false
       - uses: actions/checkout@v7
         with:
           ref: 5fc67c89ab76183af6d93766d052fe85d0c9865c
           fetch-depth: 0
+          path: source
+      - name: Import frozen Git objects and verify ancestry and tree before publishing
+        id: publish
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config core.hooksPath /dev/null
+          git fetch https://github.com/duolahypercho/codex-router.git 54e8f702f089399df94f305c244abc9f8722c168
+          git fetch origin f0811d80c18a7d33324ce74d468a76ac6180c5d3
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib
+          text = ''.join(Path(f'../workbench/.github/i18n-final/pack-{i}.b64').read_text().strip() for i in range(1, 5))
+          # Repair two known transport transcription errors, not source bytes.
+          # The authoritative checksum below rejects any other difference.
+          text = text.replace('TguObjjuntmdnmdnse', 'TguObjjuntmdnse').replace('VozDN1rp', 'VozDN9rp')
+          data = base64.b64decode(text, validate=True)
+          assert hashlib.sha256(data).hexdigest() == '01f90e554ba9d5ef6ca01f156a8854510f40c9fe3c6303786d4f9bd5ff684ebf'
+          Path('../integration.bundle').write_bytes(data)
+          PY
+          git bundle verify ../integration.bundle
+          git fetch ../integration.bundle HEAD
+          target=95d2b27289f3056bc1d754a3ad1bad8ccdfefd14
+          test "$(git rev-parse FETCH_HEAD)" = "$target"
+          test "$(git rev-parse "$target^{tree}")" = e4af0781c6db58d20ee81af82470860b7debf837
+          for parent in 54e8f702f089399df94f305c244abc9f8722c168 f0811d80c18a7d33324ce74d468a76ac6180c5d3 d795cb9bad4a6dbc08662b6608cadbcc8f312f00 70f9b2a096e5c19d502c088ec5c0247308c8372d; do
+            git merge-base --is-ancestor "$parent" "$target"
+          done
+          git diff --exit-code 54e8f702f089399df94f305c244abc9f8722c168 "$target" -- .github package.json package-lock.json apps/control-center/package.json apps/control-center/package-lock.json
+          git diff --check 54e8f702f089399df94f305c244abc9f8722c168 "$target"
+          git push origin "$target:refs/heads/codex/chinese-i18n-candidate-v2"
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+          printf 'Candidate %s; tree %s\n' "$target" "$(git rev-parse "$target^{tree}")" >> "$GITHUB_STEP_SUMMARY"
+
+  root:
+    needs: publish-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-candidate.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: Fetch frozen public integration inputs
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+        if: runner.os == 'Linux'
+      - run: npx playwright install chromium
+        if: runner.os != 'Linux'
+      - name: Root syntax and complete test suite
         shell: bash
         run: |
           set -euo pipefail
-          git -c core.hooksPath=/dev/null fetch https://github.com/duolahypercho/codex-router.git 54e8f702f089399df94f305c244abc9f8722c168:refs/heads/export-upstream
-          git -c core.hooksPath=/dev/null fetch https://github.com/MJYKIM99/codex-router.git f0811d80c18a7d33324ce74d468a76ac6180c5d3:refs/heads/export-staging
-          git -c core.hooksPath=/dev/null fetch https://github.com/coolka-hsu/codex-router.git d795cb9bad4a6dbc08662b6608cadbcc8f312f00:refs/heads/export-zh-tw
-          git branch export-candidate 5fc67c89ab76183af6d93766d052fe85d0c9865c
-          mkdir -p "$RUNNER_TEMP/chinese-integration-inputs"
-          git bundle create "$RUNNER_TEMP/chinese-integration-inputs/repository.bundle" export-candidate export-upstream export-staging export-zh-tw
-          git bundle verify "$RUNNER_TEMP/chinese-integration-inputs/repository.bundle"
-      - name: Install frozen dependencies for offline verification
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-        run: |
-          npm ci
-          npm --prefix apps/control-center ci
-      - name: Export dependency and runtime files without credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          dest="$RUNNER_TEMP/chinese-integration-inputs"
-          tar -czf "$dest/dependencies.tar.gz" node_modules apps/control-center/node_modules
-          cp "$(command -v node)" "$dest/node"
-          node --version > "$dest/node-version.txt"
-          git rev-parse HEAD > "$dest/source-sha.txt"
-          sha256sum "$dest"/* > "$dest/SHA256SUMS"
+          npm run check
+          npm test 2>&1 | tee root-tests.log
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: chinese-integration-inputs
-          path: ${{ runner.temp }}/chinese-integration-inputs/
+          name: root-${{ matrix.os }}
+          path: root-tests.log
           retention-days: 7
-          if-no-files-found: error
+
+  renderer:
+    needs: publish-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CODEX_ROUTER_UI_ARTIFACTS: ${{ github.workspace }}/ui-evidence
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/control-center/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/control-center ci
+      - run: npx playwright install --with-deps chromium
+        if: runner.os == 'Linux'
+      - run: npx playwright install chromium
+        if: runner.os != 'Linux'
+      - name: Typecheck and compiled-renderer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix apps/control-center run check
+          npm --prefix apps/control-center test 2>&1 | tee renderer-tests.log
+      - name: Build unpacked native application
+        working-directory: apps/control-center
+        run: npx --no-install electron-builder --${{ matrix.platform }} --dir
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: renderer-${{ matrix.os }}
+          path: |
+            renderer-tests.log
+            ui-evidence/
+          retention-days: 7
+
+  native:
+    needs: publish-candidate
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      MODEL_ROUTER_TRAY_UNIVERSAL: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Swift tray tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd apps/macos/ModelRouterTray && swift test) 2>&1 | tee swift-tests.log
+      - name: Widget tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd apps/macos/RouterUsageWidget && xcodebuild -project RouterUsageWidget.xcodeproj -scheme RouterUsageWidget -destination 'platform=macOS' test CODE_SIGNING_ALLOWED=NO) 2>&1 | tee widget-tests.log
+      - name: Universal unified application and bundle integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/build-macos-tray-app.sh "$RUNNER_TEMP/Codex Router.app" 2>&1 | tee native-build.log
+          app="$RUNNER_TEMP/Codex Router.app"
+          lipo "$app/Contents/MacOS/ModelRouterTray" -verify_arch x86_64 arm64
+          lipo "$app/Contents/PlugIns/RouterUsageWidget.appex/Contents/MacOS/RouterUsageWidget" -verify_arch x86_64 arm64
+          lipo "$app/Contents/Resources/Control Center.app/Contents/MacOS/Codex Router" -verify_arch x86_64 arm64
+          codesign --verify --deep --strict "$app"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-macos
+          path: |
+            swift-tests.log
+            widget-tests.log
+            native-build.log
+          retention-days: 7
