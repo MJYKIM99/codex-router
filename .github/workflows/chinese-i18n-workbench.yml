@@ -7,37 +7,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: chinese-i18n-validation
+  cancel-in-progress: false
+
 jobs:
-  prepare:
+  publish-candidate:
     if: github.repository == 'MJYKIM99/codex-router'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-      - name: Install the pinned build-only parser
-        run: npm install --prefix "$RUNNER_TEMP/parser" --ignore-scripts --no-audit --no-fund typescript@5.9.3
-      - name: Reproduce the reviewed source tree
-        env:
-          I18N_TYPESCRIPT: ${{ runner.temp }}/parser/node_modules/typescript/lib/typescript.js
-        run: python3 .github/i18n-workbench/reproduce.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chinese-i18n-candidate-source
-          path: |
-            ${{ runner.temp }}/candidate-source.tar
-            ${{ runner.temp }}/candidate-tree.txt
-          retention-days: 1
-          if-no-files-found: error
-
-  publish-candidate:
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
@@ -45,43 +23,42 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 70f9b2a096e5c19d502c088ec5c0247308c8372d
-          fetch-depth: 0
-      - uses: actions/download-artifact@v4
+          path: workbench
+          persist-credentials: false
+      - uses: actions/checkout@v7
         with:
-          name: chinese-i18n-candidate-source
-          path: ${{ runner.temp }}/candidate
-      - name: Publish only the hash-verified candidate, not the original PR branch
+          ref: c1c4c6813f7b762964e6bf2c0f79fc918e832782
+          path: candidate
+          fetch-depth: 0
+      - name: Apply only the locally verified translation-engine correction
+        run: python3 workbench/.github/i18n-workbench/fix_engine_boundary.py candidate
+      - name: Publish the exact verified tree to the candidate branch only
         id: publish
+        working-directory: candidate
         shell: bash
         run: |
           set -euo pipefail
-          expected=588b2609a16c802dc8127045f2e2f33e00c551e8
-          test "$(cat "$RUNNER_TEMP/candidate/candidate-tree.txt")" = "$expected"
-          git config core.autocrlf false
+          base=c1c4c6813f7b762964e6bf2c0f79fc918e832782
+          expected=3cda5287fabcad8bd4ec64a945e86f93ff95fc21
+          branch=codex/chinese-i18n-candidate-v1
+          test "$(git write-tree)" = "$expected"
+          git diff --cached --check
           git config core.hooksPath /dev/null
           git config user.name 'Kim Ma'
           git config user.email '141823112+MJYKIM99@users.noreply.github.com'
-          git fetch https://github.com/coolka-hsu/codex-router.git d795cb9bad4a6dbc08662b6608cadbcc8f312f00
-          git ls-files -z | xargs -0 rm -f --
-          tar -xf "$RUNNER_TEMP/candidate/candidate-source.tar" --no-same-owner
-          git add -A
-          test "$(git write-tree)" = "$expected"
-          git diff --cached --check
-          message='feat(i18n): unify Simplified and Traditional Chinese desktop presentation
-
-          Adapt the semantic Control Center and panel localization from PR #857
-          by @coolka-hsu while preserving the Simplified Chinese native menus,
-          tray, widget compatibility, and backend display safeguards in #839.
-          Retain both original contribution histories; no history is rewritten.
-
-          Keep unmerged custom-endpoint and Usage feature changes out of this
-          presentation-only integration.'
-          sha=$(printf '%s\n' "$message" | git commit-tree "$expected" \
-            -p 70f9b2a096e5c19d502c088ec5c0247308c8372d \
-            -p d795cb9bad4a6dbc08662b6608cadbcc8f312f00)
-          git push origin "$sha:refs/heads/codex/chinese-i18n-candidate-v1"
+          git fetch origin "$branch"
+          current=$(git rev-parse FETCH_HEAD)
+          if [ "$current" = "$base" ]; then
+            git commit -m 'fix(i18n): keep translation core independent of React' -m 'Separate the renderer context from the pure translation engine and preserve all page callers. Add a standalone subprocess regression using the actual shipped modules without renderer dependencies. No dependency, test skip or upstream workflow changes.'
+            sha=$(git rev-parse HEAD)
+            git push origin "$sha:refs/heads/$branch"
+          else
+            git merge-base --is-ancestor "$base" "$current"
+            test "$(git rev-parse "$current^{tree}")" = "$expected"
+            sha=$current
+          fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          printf 'Validated candidate: %s; tree: %s\n' "$sha" "$expected" >> "$GITHUB_STEP_SUMMARY"
 
   root-tests:
     needs: publish-candidate
