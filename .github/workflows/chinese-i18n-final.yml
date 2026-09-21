@@ -1,0 +1,56 @@
+name: Chinese integration final verification
+
+on:
+  push:
+    branches: [codex/chinese-i18n-final-validation]
+
+permissions:
+  contents: read
+
+jobs:
+  export-inputs:
+    if: github.repository == 'MJYKIM99/codex-router'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 5fc67c89ab76183af6d93766d052fe85d0c9865c
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Fetch frozen public integration inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.hooksPath=/dev/null fetch https://github.com/duolahypercho/codex-router.git 54e8f702f089399df94f305c244abc9f8722c168:refs/heads/export-upstream
+          git -c core.hooksPath=/dev/null fetch https://github.com/MJYKIM99/codex-router.git f0811d80c18a7d33324ce74d468a76ac6180c5d3:refs/heads/export-staging
+          git -c core.hooksPath=/dev/null fetch https://github.com/coolka-hsu/codex-router.git d795cb9bad4a6dbc08662b6608cadbcc8f312f00:refs/heads/export-zh-tw
+          git branch export-candidate 5fc67c89ab76183af6d93766d052fe85d0c9865c
+          mkdir -p "$RUNNER_TEMP/chinese-integration-inputs"
+          git bundle create "$RUNNER_TEMP/chinese-integration-inputs/repository.bundle" export-candidate export-upstream export-staging export-zh-tw
+          git bundle verify "$RUNNER_TEMP/chinese-integration-inputs/repository.bundle"
+      - name: Install frozen dependencies for offline verification
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: |
+          npm ci
+          npm --prefix apps/control-center ci
+      - name: Export dependency and runtime files without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/chinese-integration-inputs"
+          tar -czf "$dest/dependencies.tar.gz" node_modules apps/control-center/node_modules
+          cp "$(command -v node)" "$dest/node"
+          node --version > "$dest/node-version.txt"
+          git rev-parse HEAD > "$dest/source-sha.txt"
+          sha256sum "$dest"/* > "$dest/SHA256SUMS"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chinese-integration-inputs
+          path: ${{ runner.temp }}/chinese-integration-inputs/
+          retention-days: 7
+          if-no-files-found: error
