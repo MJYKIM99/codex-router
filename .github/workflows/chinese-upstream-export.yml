@@ -1,0 +1,33 @@
+name: Export frozen upstream for Chinese integration
+on:
+  push:
+    branches: [codex/chinese-i18n-upstream-review]
+permissions:
+  contents: read
+jobs:
+  export:
+    if: github.repository == 'MJYKIM99/codex-router'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: c31e77b6b31b6724265abec9d58c549c562c5867
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export reviewed public upstream range
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.hooksPath=/dev/null fetch https://github.com/duolahypercho/codex-router.git bf55dec27702e678730e27b9b3597eb4b1c74539:refs/heads/frozen-upstream
+          git merge-base --is-ancestor 54e8f702f089399df94f305c244abc9f8722c168 frozen-upstream
+          mkdir -p "$RUNNER_TEMP/upstream"
+          git bundle create "$RUNNER_TEMP/upstream/delta.bundle" frozen-upstream ^54e8f702f089399df94f305c244abc9f8722c168
+          git bundle verify "$RUNNER_TEMP/upstream/delta.bundle"
+          sha256sum "$RUNNER_TEMP/upstream/delta.bundle" > "$RUNNER_TEMP/upstream/SHA256SUMS"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frozen-upstream-delta
+          path: ${{ runner.temp }}/upstream/
+          retention-days: 7
+          if-no-files-found: error
