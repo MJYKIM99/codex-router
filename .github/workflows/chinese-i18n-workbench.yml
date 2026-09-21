@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: chinese-i18n-validation
+  group: chinese-i18n-validation-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -27,19 +27,19 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: c1c4c6813f7b762964e6bf2c0f79fc918e832782
+          ref: bbf034ed859a2f8ab662d541ee31d54ce403feab
           path: candidate
           fetch-depth: 0
-      - name: Apply only the locally verified translation-engine correction
-        run: python3 workbench/.github/i18n-workbench/fix_engine_boundary.py candidate
+      - name: Apply the independently tested English and Chinese copy correction
+        run: python3 workbench/.github/i18n-workbench/fix_copy_contract.py candidate
       - name: Publish the exact verified tree to the candidate branch only
         id: publish
         working-directory: candidate
         shell: bash
         run: |
           set -euo pipefail
-          base=c1c4c6813f7b762964e6bf2c0f79fc918e832782
-          expected=3cda5287fabcad8bd4ec64a945e86f93ff95fc21
+          base=bbf034ed859a2f8ab662d541ee31d54ce403feab
+          expected=e6ff72c27b1c5dba2e36626b89d8f44325c1313c
           branch=codex/chinese-i18n-candidate-v1
           test "$(git write-tree)" = "$expected"
           git diff --cached --check
@@ -49,7 +49,7 @@ jobs:
           git fetch origin "$branch"
           current=$(git rev-parse FETCH_HEAD)
           if [ "$current" = "$base" ]; then
-            git commit -m 'fix(i18n): keep translation core independent of React' -m 'Separate the renderer context from the pure translation engine and preserve all page callers. Add a standalone subprocess regression using the actual shipped modules without renderer dependencies. No dependency, test skip or upstream workflow changes.'
+            git commit -m 'fix(i18n): preserve reasoning-control meaning and Chinese page headings' -m 'Keep the English Reasoning effort column rather than turning it into the Thinking activity state. Localize the Traditional Chinese Harness and Context headings and Simplified Chinese API-key labels. Add independent copy-contract assertions; retain existing browser expectations.'
             sha=$(git rev-parse HEAD)
             git push origin "$sha:refs/heads/$branch"
           else
