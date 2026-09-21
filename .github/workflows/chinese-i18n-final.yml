@@ -23,31 +23,31 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: aeeff5a3a59b08f1b14f1ded2c736a7ccd044caf
+          ref: a5ba65c7f1086688212471b570d3beb5556ac11d
           fetch-depth: 0
           path: source
-      - name: Reproduce and verify the final layout correction
+      - name: Reproduce and verify the responsive summary correction
         id: publish
         working-directory: source
         shell: bash
         run: |
           set -euo pipefail
           git config core.hooksPath /dev/null
-          python3 ../workbench/.github/i18n-final/cache-layout.py
+          python3 ../workbench/.github/i18n-final/responsive.py
           git add -A
-          test "$(git write-tree)" = af878954dd7e391c255ae282b018d10dd360b8f9
+          test "$(git write-tree)" = 45a73053946b88b210d6f1bc64f61835a8957f42
           cat > "$RUNNER_TEMP/reviewed.commit" <<'COMMIT'
-          tree af878954dd7e391c255ae282b018d10dd360b8f9
-          parent aeeff5a3a59b08f1b14f1ded2c736a7ccd044caf
-          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790023024 +0000
-          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790023024 +0000
+          tree 45a73053946b88b210d6f1bc64f61835a8957f42
+          parent a5ba65c7f1086688212471b570d3beb5556ac11d
+          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790023943 +0000
+          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790023943 +0000
 
-          fix(ui): keep localized cache hit rates visible in narrow summary cells
+          fix(ui): let summary variants obey responsive breakpoints
 
-          Allow the combined cache count and hit-rate value to wrap instead of silently ellipsizing the rate. Browser regressions verify that both dimensions fit at 960, 1280 and 1600 pixel widths in English and both Chinese interfaces.
+          The account-specific class selectors outranked the three-column media rule, leaving seven cramped cells at the 960px minimum window. Lower only the default variant specificity, preserve the existing responsive design, and give wrapped cache values sufficient line height on Windows. Assert both grid columns and unclipped metrics in real browser tests.
           COMMIT
           target=$(git hash-object -t commit -w "$RUNNER_TEMP/reviewed.commit")
-          test "$target" = a5ba65c7f1086688212471b570d3beb5556ac11d
+          test "$target" = e97b82295a02323b8c90fbcc71a68a0a54e7c397
           for parent in bf55dec27702e678730e27b9b3597eb4b1c74539 f0811d80c18a7d33324ce74d468a76ac6180c5d3 d795cb9bad4a6dbc08662b6608cadbcc8f312f00 70f9b2a096e5c19d502c088ec5c0247308c8372d; do
             git merge-base --is-ancestor "$parent" "$target"
           done
@@ -79,12 +79,21 @@ jobs:
         if: runner.os == 'Linux'
       - run: npx playwright install chromium
         if: runner.os != 'Linux'
-      - name: Root syntax and complete test suite
+      - name: Root syntax and complete test suite (POSIX)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
           npm run check
           npm test 2>&1 | tee root-tests.log
+      - name: Root syntax and complete test suite (Windows native shell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm run check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test 2>&1 | Tee-Object -FilePath root-tests.log
+          exit $LASTEXITCODE
       - uses: actions/upload-artifact@v7
         if: always()
         with:
