@@ -19,32 +19,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: c31e77b6b31b6724265abec9d58c549c562c5867
+          path: workbench
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: aeeff5a3a59b08f1b14f1ded2c736a7ccd044caf
           fetch-depth: 0
-      - name: Verify the current upstream merge before publishing the fork candidate
+          path: source
+      - name: Reproduce and verify the final layout correction
         id: publish
+        working-directory: source
         shell: bash
         run: |
           set -euo pipefail
           git config core.hooksPath /dev/null
-          git config user.name 'Kim Ma'
-          git config user.email '141823112+MJYKIM99@users.noreply.github.com'
-          git fetch https://github.com/duolahypercho/codex-router.git bf55dec27702e678730e27b9b3597eb4b1c74539
-          git merge --no-ff --no-commit bf55dec27702e678730e27b9b3597eb4b1c74539
-          test "$(git write-tree)" = 2aa08d07b30095f3a6c4186d90c33e080e4d7201
+          python3 ../workbench/.github/i18n-final/cache-layout.py
+          git add -A
+          test "$(git write-tree)" = af878954dd7e391c255ae282b018d10dd360b8f9
           cat > "$RUNNER_TEMP/reviewed.commit" <<'COMMIT'
-          tree 2aa08d07b30095f3a6c4186d90c33e080e4d7201
-          parent c31e77b6b31b6724265abec9d58c549c562c5867
-          parent bf55dec27702e678730e27b9b3597eb4b1c74539
-          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022809 +0000
-          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022809 +0000
+          tree af878954dd7e391c255ae282b018d10dd360b8f9
+          parent aeeff5a3a59b08f1b14f1ded2c736a7ccd044caf
+          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790023024 +0000
+          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790023024 +0000
 
-          merge: reconcile the current upstream routing fixes with Chinese UI integration
+          fix(ui): keep localized cache hit rates visible in narrow summary cells
 
-          Integrate upstream bf55dec after the four newly merged backend fixes. The 23 upstream paths do not intersect the 83 localization paths; preserve both trees byte-for-byte rather than modifying routing behavior in the localization work. Final cross-platform validation runs on this combined tree.
+          Allow the combined cache count and hit-rate value to wrap instead of silently ellipsizing the rate. Browser regressions verify that both dimensions fit at 960, 1280 and 1600 pixel widths in English and both Chinese interfaces.
           COMMIT
           target=$(git hash-object -t commit -w "$RUNNER_TEMP/reviewed.commit")
-          test "$target" = aeeff5a3a59b08f1b14f1ded2c736a7ccd044caf
+          test "$target" = a5ba65c7f1086688212471b570d3beb5556ac11d
           for parent in bf55dec27702e678730e27b9b3597eb4b1c74539 f0811d80c18a7d33324ce74d468a76ac6180c5d3 d795cb9bad4a6dbc08662b6608cadbcc8f312f00 70f9b2a096e5c19d502c088ec5c0247308c8372d; do
             git merge-base --is-ancestor "$parent" "$target"
           done
