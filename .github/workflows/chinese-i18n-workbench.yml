@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  source-snapshot:
+  prepare:
     if: github.repository == 'MJYKIM99/codex-router'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -19,45 +19,135 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: Prepare pinned public source snapshots
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/i18n-workbench"
-          root="$RUNNER_TEMP/i18n-workbench"
-          snapshot() {
-            local name="$1" sha="$2"
-            mkdir -p "$root/$name"
-            curl --fail --silent --show-error --location --retry 2 \
-              "https://codeload.github.com/duolahypercho/codex-router/tar.gz/$sha" \
-              | tar -xz --strip-components=1 -C "$root/$name"
-          }
-          snapshot pr839 70f9b2a096e5c19d502c088ec5c0247308c8372d
-          snapshot upstream 9c0db45676238d032757370ec4010b66b6759dd8
-          snapshot zhTW d795cb9bad4a6dbc08662b6608cadbcc8f312f00
-          snapshot usage 6417f44739bec5708be6d9bc2770c3c8c370285f
-          snapshot custom e14bff0c6fe763746f5ef437382e3e3e108245c9
-          snapshot base 5e1b49e6e3fea1ada57f0e7fa6ca7612e9d17300
-          printf '%s\n' 'pr839=70f9b2a096e5c19d502c088ec5c0247308c8372d' 'upstream=9c0db45676238d032757370ec4010b66b6759dd8' 'zhTW=d795cb9bad4a6dbc08662b6608cadbcc8f312f00' 'usage=6417f44739bec5708be6d9bc2770c3c8c370285f' 'custom=e14bff0c6fe763746f5ef437382e3e3e108245c9' 'base=5e1b49e6e3fea1ada57f0e7fa6ca7612e9d17300' > "$root/refs.txt"
-          cp "$(command -v node)" "$root/node24"
-      - name: Install locked JavaScript dependencies in disposable checkout
-        shell: bash
+      - name: Install the pinned build-only parser
+        run: npm install --prefix "$RUNNER_TEMP/parser" --ignore-scripts --no-audit --no-fund typescript@5.9.3
+      - name: Reproduce the reviewed source tree
         env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/i18n-workbench/pr839"
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm ci --prefix apps/control-center --ignore-scripts --no-audit --no-fund
-      - name: Archive only source snapshots and locked dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          tar -czf "$RUNNER_TEMP/chinese-i18n-workbench.tar.gz" -C "$RUNNER_TEMP" i18n-workbench
+          I18N_TYPESCRIPT: ${{ runner.temp }}/parser/node_modules/typescript/lib/typescript.js
+        run: python3 .github/i18n-workbench/reproduce.py
       - uses: actions/upload-artifact@v4
         with:
-          name: chinese-i18n-workbench
-          path: ${{ runner.temp }}/chinese-i18n-workbench.tar.gz
+          name: chinese-i18n-candidate-source
+          path: |
+            ${{ runner.temp }}/candidate-source.tar
+            ${{ runner.temp }}/candidate-tree.txt
           retention-days: 1
           if-no-files-found: error
+
+  publish-candidate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 70f9b2a096e5c19d502c088ec5c0247308c8372d
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: chinese-i18n-candidate-source
+          path: ${{ runner.temp }}/candidate
+      - name: Publish only the hash-verified candidate, not the original PR branch
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=588b2609a16c802dc8127045f2e2f33e00c551e8
+          test "$(cat "$RUNNER_TEMP/candidate/candidate-tree.txt")" = "$expected"
+          git config core.autocrlf false
+          git config core.hooksPath /dev/null
+          git config user.name 'Kim Ma'
+          git config user.email '141823112+MJYKIM99@users.noreply.github.com'
+          git fetch https://github.com/coolka-hsu/codex-router.git d795cb9bad4a6dbc08662b6608cadbcc8f312f00
+          git ls-files -z | xargs -0 rm -f --
+          tar -xf "$RUNNER_TEMP/candidate/candidate-source.tar" --no-same-owner
+          git add -A
+          test "$(git write-tree)" = "$expected"
+          git diff --cached --check
+          message='feat(i18n): unify Simplified and Traditional Chinese desktop presentation
+
+          Adapt the semantic Control Center and panel localization from PR #857
+          by @coolka-hsu while preserving the Simplified Chinese native menus,
+          tray, widget compatibility, and backend display safeguards in #839.
+          Retain both original contribution histories; no history is rewritten.
+
+          Keep unmerged custom-endpoint and Usage feature changes out of this
+          presentation-only integration.'
+          sha=$(printf '%s\n' "$message" | git commit-tree "$expected" \
+            -p 70f9b2a096e5c19d502c088ec5c0247308c8372d \
+            -p d795cb9bad4a6dbc08662b6608cadbcc8f312f00)
+          git push origin "$sha:refs/heads/codex/chinese-i18n-candidate-v1"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  root-tests:
+    needs: publish-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Install browser for root panel E2E
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - run: npm test
+
+  control-center:
+    needs: publish-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm --prefix apps/control-center ci
+      - run: npm --prefix apps/control-center run check
+      - run: npm --prefix apps/control-center run build
+      - name: Install renderer browser
+        working-directory: apps/control-center
+        run: npx playwright install --with-deps chromium
+      - run: npm --prefix apps/control-center test
+
+  native-macos:
+    needs: publish-candidate
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Native tray tests
+        working-directory: apps/macos/ModelRouterTray
+        run: swift test
+      - name: Widget tests
+        working-directory: apps/macos/RouterUsageWidget
+        run: xcodebuild -project RouterUsageWidget.xcodeproj -scheme RouterUsageWidget -destination 'platform=macOS' test CODE_SIGNING_ALLOWED=NO
