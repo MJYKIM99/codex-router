@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 95d2b27289f3056bc1d754a3ad1bad8ccdfefd14
+          ref: e49195e1bd3327fb350106ea9eaf6da081f7c74a
           fetch-depth: 0
           path: source
       - name: Reproduce the reviewed correction and verify its exact tree
@@ -33,21 +33,21 @@ jobs:
         run: |
           set -euo pipefail
           git config core.hooksPath /dev/null
-          python3 ../workbench/.github/i18n-final/refine.py
+          python3 ../workbench/.github/i18n-final/dates.py
           git add -A
-          test "$(git write-tree)" = d88fda39e4898212757c74a755596cd02c3cc390
+          test "$(git write-tree)" = c5369f814905ec2cc02a785550f21af381ffcef6
           cat > ../reviewed.commit <<'COMMIT'
-          tree d88fda39e4898212757c74a755596cd02c3cc390
-          parent 95d2b27289f3056bc1d754a3ad1bad8ccdfefd14
-          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790021792 +0000
-          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790021792 +0000
+          tree c5369f814905ec2cc02a785550f21af381ffcef6
+          parent e49195e1bd3327fb350106ea9eaf6da081f7c74a
+          author Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022352 +0000
+          committer Kim Ma <141823112+MJYKIM99@users.noreply.github.com> 1790022352 +0000
 
-          fix(i18n): validate native locale parsing and complete Traditional interface copy
+          fix(i18n): localize chart dates and preserve native wording semantics
 
-          Disambiguate Foundation locale subtag handling in the tray and widget. Keep remaining ordinary Traditional labels localized. Await the observable edit-form state in browser regressions, keep fixture credentials out of snapshots, and capture new dialog and Usage views for review.
+          Pass the active translator through daily/hourly chart labels, date captions and currency formatting without altering UTC bucket keys or numeric accounting. Correct apply-versus-application wording in Traditional native copy. Scope browser actions to the endpoint menu and assert the initialized catalog filter.
           COMMIT
           target=$(git hash-object -t commit -w ../reviewed.commit)
-          test "$target" = e49195e1bd3327fb350106ea9eaf6da081f7c74a
+          test "$target" = c31e77b6b31b6724265abec9d58c549c562c5867
           for parent in 54e8f702f089399df94f305c244abc9f8722c168 f0811d80c18a7d33324ce74d468a76ac6180c5d3 d795cb9bad4a6dbc08662b6608cadbcc8f312f00 70f9b2a096e5c19d502c088ec5c0247308c8372d; do
             git merge-base --is-ancestor "$parent" "$target"
           done
