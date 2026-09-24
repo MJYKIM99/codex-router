@@ -13,8 +13,10 @@ import { routedCatalogConfigured } from "./catalog.mjs";
 import { nativeCatalogVersionDrift } from "./native-catalog-freshness.mjs";
 import { readNativeCatalogSource, readRootStringValues } from "./native-catalog-source.mjs";
 import {
+  bridgeAddress,
   chatgptWebHome,
   chatgptWebOwnershipVerdict,
+  probeBridgeListener,
   readChatgptWebRouteClaim,
 } from "./chatgpt-web-launcher.mjs";
 import {
@@ -24,6 +26,7 @@ import {
   providerNeedsNoKey,
   RUNTIME_PROVIDERS,
   RUNTIME_PROVIDER_WARNINGS,
+  resolveProviderBaseUrl,
   USER_MODELS_SKIPPED,
 } from "./model-registry.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
@@ -1734,6 +1737,31 @@ add(
         : `not ready on 127.0.0.1:${PORTS.router} after ${serviceLoaded ? 30 : 2} seconds; ${health.error}`,
   "Run ./bin/doctor --fix. If it still fails, create a support bundle.",
 );
+
+// A selected chatgpt-web route is the one route whose upstream is not a
+// provider the router starts: it is another program's bridge on loopback. The
+// router relays its connection failure verbatim and never retries, by design,
+// so the failure is honest but arrives as a turn that did not work. Paying for
+// this one loopback connect only when that route is selected keeps a diagnostic
+// that costs nothing for everyone else, and the account it will run as is the
+// bridge's own browser sign-in, not the ChatGPT login Codex is using.
+if (codexTarget && selection.providers.includes("chatgpt-web")) {
+  const { baseUrl, refusedOverride } = resolveProviderBaseUrl(PROVIDERS.get("chatgpt-web"));
+  const address = bridgeAddress(baseUrl);
+  const listening = address ? await probeBridgeListener(address) : false;
+  add(
+    listening ? "ok" : "warn",
+    "ChatGPT Web bridge",
+    listening
+      ? `listening at ${redactCallerUrl(baseUrl)}`
+      : refusedOverride
+        ? `${redactCallerUrl(refusedOverride)} is not a loopback address, so the bridge at ${redactCallerUrl(baseUrl)} is unused`
+        : `nothing is listening at ${redactCallerUrl(baseUrl)}; a chatgpt-web turn would fail on its first request`,
+    listening
+      ? undefined
+      : "Start it with `codex-chatgpt-web serve`, or install its background service with `codex-chatgpt-web service install`.",
+  );
+}
 
 // A healthy router that no client can reach looks identical to a healthy
 // router, which is why this sits directly under the health check. When a

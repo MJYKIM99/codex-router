@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
 
 import {
+  bridgeAddress,
   chatgptWebHome,
   chatgptWebJournalPath,
   chatgptWebOwnershipVerdict,
+  probeBridgeListener,
   readChatgptWebRouteClaim,
   sameCodexProfile,
 } from "../src/chatgpt-web-launcher.mjs";
@@ -195,4 +198,22 @@ test("one profile written two ways is one profile", () => {
   assert.equal(sameCodexProfile("", canonical), false);
   assert.equal(sameCodexProfile(undefined, canonical), false);
   assert.equal(sameCodexProfile(path.join(os.homedir(), ".codex-cgw", "config.toml"), canonical), false);
+});
+
+test("the bridge address is taken from the route the router would use", () => {
+  assert.deepEqual(bridgeAddress("http://127.0.0.1:17841/v1"), { host: "127.0.0.1", port: 17841 });
+  assert.deepEqual(bridgeAddress("https://bridge.example/v1"), { host: "bridge.example", port: 443 });
+  // A refusal to answer is the right answer for a value the router cannot use.
+  assert.equal(bridgeAddress("not a url"), null);
+  assert.equal(bridgeAddress(""), null);
+  assert.equal(bridgeAddress(undefined), null);
+});
+
+test("the listening check sees a real listener and a closed port", async () => {
+  const server = net.createServer(() => {});
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  assert.equal(await probeBridgeListener({ host: "127.0.0.1", port, timeoutMs: 500 }), true);
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(await probeBridgeListener({ host: "127.0.0.1", port, timeoutMs: 500 }), false);
 });

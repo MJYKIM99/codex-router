@@ -1641,6 +1641,63 @@ have to run Codex against it, and the desktop app cannot, since it reads
   back, then `./bin/refresh-catalog`. `doctor --fix` will not do this for you:
   it refuses to overwrite an `openai_base_url` it does not own.
 
+#### Which ChatGPT account a web turn runs as
+
+Not the one the router is using. A `chatgpt-web` turn is driven by the bridge's
+own browser sign-in: the model list, the capabilities that filter it, and the
+quota the turn spends all belong to the account signed into the launcher. The
+router sends the bridge a placeholder bearer with the account headers removed,
+so the two sides are separate accounts by construction rather than by
+convention.
+
+That makes "can I switch Codex accounts and still use web models" yes in both
+directions:
+
+- Switching the native account leaves `config.toml` alone, so the route and this
+  provider survive it. Curated `chatgpt-web/*` rows live in `user-models.json`,
+  which is not part of a per-account profile, and the switch republishes the
+  catalog — so they return on their own as long as the provider stays enabled.
+- Web turns do not follow the switch. They keep running as the launcher's
+  browser sign-in, whatever Codex is signed into.
+
+Which models exist follows that same sign-in. `chatgpt-web/pro` and
+`chatgpt-web/extra-high` carry a Pro requirement, and the launcher offers them
+only when the account signed into it reports that capability — so signing a Pro
+account into the launcher is what unlocks them, and Codex can stay signed in
+anywhere else.
+
+The tradeoff is worth naming, because it decides this differently for different
+people: the rows that need Pro are also the rows that put the Pro account in
+front of the browser automation. A secondary account in the launcher keeps
+Codex's login out of that, but the same secondary account cannot serve the Pro
+rows, because they do not exist for it. Using the app itself is the same kind
+of browser automation, so this provider does not introduce a new risk — but the
+router can run far more turns than one app window, and volume is what an
+automation policy notices. Do not make a `chatgpt-web` model your default or a
+subagent model if the account behind it is one you cannot lose.
+
+After signing the launcher's browser into an account, or changing it, re-read
+what the account reports and re-curate, or the picker keeps the previous
+account's rows:
+
+```sh
+codex-chatgpt-web setup --refresh-account-capabilities
+./bin/curate-models chatgpt-web --refresh
+```
+
+`serve` reads its configuration once, so changing the bridge's own
+configuration also needs a restart.
+
+Switching native accounts still needs Codex closed first; that is the account
+feature's own rule and has nothing to do with this provider.
+
+`doctor` checks the bridge only when `chatgpt-web` is one of your enabled
+providers, and reports it as **ChatGPT Web bridge**: `listening at
+<address>` when a turn would have somewhere to go, and a warning naming
+`codex-chatgpt-web serve` when nothing is listening — otherwise the first
+symptom is a turn that fails with a connection error, which this provider
+relays verbatim and never retries.
+
 ### Use a local model in Codex (experimental)
 
 LM Studio can run as a second local backend alongside Ollama. Its models use

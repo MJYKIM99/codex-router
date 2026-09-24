@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -151,4 +152,43 @@ export function chatgptWebOwnershipVerdict({ claim, codexBaseUrls = [] } = {}) {
   return {
     state: claimed !== null && live.includes(claimed) ? "taken-over" : "latent",
   };
+}
+
+export function bridgeAddress(baseUrl) {
+  try {
+    const url = new URL(String(baseUrl));
+    const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+    if (!url.hostname || !Number.isInteger(port) || port <= 0 || port > 65_535) return null;
+    return { host: url.hostname, port };
+  } catch {
+    return null;
+  }
+}
+
+// A listening check, not an HTTP request: the bridge serves /v1/models from the
+// signed-in account's own catalog and may refuse an unauthenticated call, so a
+// 401 there would say nothing about whether the port is up. What the router
+// needs to know before it offers a web model is only whether a turn would have
+// somewhere to go.
+export function probeBridgeListener({ host, port, timeoutMs = 1_000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let socket = null;
+    const finish = (listening) => {
+      if (settled) return;
+      settled = true;
+      if (socket) socket.destroy();
+      resolve(listening);
+    };
+    try {
+      socket = net.connect({ host, port });
+    } catch {
+      resolve(false);
+      return;
+    }
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
 }

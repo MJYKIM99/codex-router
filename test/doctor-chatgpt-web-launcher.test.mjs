@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -40,7 +41,13 @@ function writeJournal(journalHome, journal) {
 // Every case redirects the launcher's own home too: the check reads a journal
 // written by another program, and a maintainer who really has the launcher
 // installed must not be able to change what this fixture reports.
-function runDoctor({ baseUrl = routerBaseUrl, journal = null, journalHome = "fresh" } = {}) {
+function runDoctor({
+  baseUrl = routerBaseUrl,
+  journal = null,
+  journalHome = "fresh",
+  enabledProviders = null,
+  bridgeUrl = null,
+} = {}) {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-doctor-cgw-"));
   // "fresh" is a launcher data directory that exists with no journal in it;
   // "absent" is no directory at all. Those are the two states an operator must
@@ -58,6 +65,13 @@ function runDoctor({ baseUrl = routerBaseUrl, journal = null, journalHome = "fre
     `model_provider = "custom"\nopenai_base_url = ${JSON.stringify(baseUrl)}\n\n[model_providers.custom]\nname = "Codex Router"\nbase_url = ${JSON.stringify(baseUrl)}\nwire_api = "responses"\n`,
     { mode: 0o600 },
   );
+  if (enabledProviders) {
+    writeFileSync(
+      path.join(stateDir, "enabled-providers.json"),
+      `${JSON.stringify({ version: 1, providers: enabledProviders })}\n`,
+      { mode: 0o600 },
+    );
+  }
   if (journal) writeJournal(journalHomePath, journal(configPath));
   const result = spawnSync(process.execPath, [path.join(root, "src", "doctor.mjs"), "--json"], {
     cwd: root,
@@ -71,6 +85,7 @@ function runDoctor({ baseUrl = routerBaseUrl, journal = null, journalHome = "fre
       CODEX_ROUTER_PORT: "46193",
       CODEX_ROUTER_SERVICE_PLATFORM: "test-fixture",
       CODEX_ROUTER_STATE_DIR: stateDir,
+      ...(bridgeUrl ? { MODEL_ROUTER_CHATGPT_WEB_BASE_URL: bridgeUrl } : {}),
       MODEL_ROUTER_STATE_DIR: stateDir,
       MODEL_ROUTER_TARGET: "codex",
     },
@@ -83,7 +98,8 @@ function runDoctor({ baseUrl = routerBaseUrl, journal = null, journalHome = "fre
   }
   const check = parsed.checks.find((entry) => entry.name === "ChatGPT Web launcher");
   assert.ok(check, `doctor did not report the launcher check: ${result.stdout}`);
-  return { check, configPath, stdout: result.stdout };
+  const bridge = parsed.checks.find((entry) => entry.name === "ChatGPT Web bridge");
+  return { check, bridge, configPath, stdout: result.stdout };
 }
 
 test(
@@ -209,5 +225,45 @@ test(
       baseUrl: launcherBaseUrl,
     });
     assert.equal(check.status, "fail");
+  },
+);
+
+test(
+  "a router that is not offering web models does not pay for a bridge probe",
+  { timeout: 40_000 },
+  () => {
+    const { bridge } = runDoctor({ enabledProviders: ["deepseek"] });
+    assert.equal(bridge, undefined, "the probe ran without chatgpt-web selected");
+  },
+);
+
+test(
+  "a selected web route reports the bridge it would actually reach",
+  { timeout: 40_000 },
+  async () => {
+    // Something is listening: the check says which address it found, so an
+    // operator can see it is their own bridge and not a leftover process.
+    const server = net.createServer(() => {});
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    try {
+      const listening = runDoctor({
+        enabledProviders: ["chatgpt-web"],
+        bridgeUrl: `http://127.0.0.1:${port}/v1`,
+      });
+      assert.equal(listening.bridge?.status, "ok");
+      assert.match(listening.bridge.detail, new RegExp(`127\\.0\\.0\\.1:${port}`));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    // And nothing listening is a warning, not a silent first-turn failure.
+    const stopped = runDoctor({
+      enabledProviders: ["chatgpt-web"],
+      bridgeUrl: `http://127.0.0.1:${port}/v1`,
+    });
+    assert.equal(stopped.bridge?.status, "warn");
+    assert.match(stopped.bridge.detail, /nothing is listening/);
+    assert.match(stopped.bridge.fix, /codex-chatgpt-web serve/);
   },
 );
