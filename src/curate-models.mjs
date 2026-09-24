@@ -28,10 +28,12 @@ import {
   curatedModelContextLength,
   curatedModelDescription,
   curatedModelInputModalities,
+  curatedModelIds,
   curatedModelProviderId,
   curatedModelReasoningLevels,
   curatedModelRequestProfile,
 } from "./opencode-curation.mjs";
+import { readChatgptWebBridgeConfig } from "./chatgpt-web-launcher.mjs";
 import {
   applyModelOverlayPublication,
   transactModelOverlayMutation,
@@ -143,6 +145,36 @@ export function curatedSizing(contextLength) {
   return {
     contextWindow: contextLength,
     autoCompact: Math.floor(contextLength * AUTO_COMPACT_RATIO),
+  };
+}
+
+// Curation for a provider whose catalog cannot be read at all. A direct
+// Responses provider's catalog endpoint is another program's local bridge, and
+// that bridge merges the caller's own ChatGPT rows into /v1/models -- so
+// reading it requires the caller's ChatGPT bearer, which this router
+// deliberately never hands to a same-user process. Asking would only ever
+// return an authentication failure, so the route table is the authority: the
+// checked-in ids (the same table that documents each route's effort ladder),
+// sized by the window the bridge itself declares for the turns it serves.
+function directResponsesCurationCatalog(provider) {
+  const ids = curatedModelIds(provider.id);
+  const bridge = readChatgptWebBridgeConfig();
+  const contextLengths = {};
+  const inputModalities = {};
+  for (const id of ids) {
+    if (bridge?.contextWindow) contextLengths[id] = bridge.contextWindow;
+    if (bridge?.carriesImages) inputModalities[id] = ["text", "image"];
+  }
+  return {
+    provider: provider.id,
+    discovered: [...ids],
+    registered: [],
+    unregistered: [...ids],
+    addable: [...ids],
+    blocked: {},
+    unavailable: [],
+    contextLengths,
+    inputModalities,
   };
 }
 
@@ -448,12 +480,24 @@ async function main() {
   // Additions read the provider's cached list by default: it is the same list
   // the caller chose from, and re-asking the provider makes every add pay for
   // a network round trip it does not need. `--refresh` re-asks.
-  const discovery = removeOption === undefined
+  // A direct provider never asks its endpoint for a catalog, for the reason
+  // `directResponsesCurationCatalog` records: there is nothing to ask that
+  // would not hand an account credential to the bridge. `--refresh` therefore
+  // re-reads the bridge's own configuration rather than the network.
+  // A `--fixture` is the operator or a test supplying the catalog itself, so it
+  // keeps the ordinary discovery path; only a real run is forced onto the route
+  // table.
+  const directCatalog = removeOption === undefined &&
+      provider.directResponses === true &&
+      !process.argv.includes("--fixture")
+    ? directResponsesCurationCatalog(provider)
+    : undefined;
+  const discovery = directCatalog ?? (removeOption === undefined
     ? await discoverProviderModels(providerId, {
         refresh: refreshCatalog,
         ...(staticCatalog ? { staticCatalog: true } : {}),
       })
-    : { unregistered: [], addable: [], blocked: {} };
+    : { unregistered: [], addable: [], blocked: {} });
   const candidates = [...new Set([...(discovery.addable || discovery.unregistered), ...curated])].sort();
 
   if (freeOnly && !Array.isArray(discovery.free)) {

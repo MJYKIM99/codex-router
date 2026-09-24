@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -218,6 +218,71 @@ test("ChatGPT Web curation preserves its live Codex catalog metadata", () => {
     assert.deepEqual(model.inputModalities, ["text", "image"]);
     assert.deepEqual(model.reasoningLevels, [{ effort: "ultra", description: "Pro reasoning" }]);
     assert.equal(model.defaultEffort, "ultra");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ChatGPT Web curation asks the route table, not an endpoint that cannot answer", () => {
+  // The bridge's /v1/models merges native rows through the caller's ChatGPT
+  // bearer, which this router never sends, so a real run has no catalog to
+  // read. Succeeding here without a --fixture and without a bridge running is
+  // the assertion: nothing on this path reaches the network.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-chatgpt-web-static-"));
+  const launcherHome = path.join(dir, "launcher");
+  const file = path.join(dir, "user-models.json");
+  mkdirSync(launcherHome, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    path.join(launcherHome, "config.json"),
+    `${JSON.stringify({ version: 3, mode: "browser-only", contextWindow: 256_000, port: 17841 })}\n`,
+    { mode: 0o600 },
+  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, "src", "curate-models.mjs"),
+        "chatgpt-web",
+        "--models",
+        "chatgpt-web/luna,chatgpt-web/light,chatgpt-web/medium,chatgpt-web/high,chatgpt-web/extra-high,chatgpt-web/pro",
+        "--no-apply",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_CHATGPT_WEB_HOME: launcherHome,
+          MODEL_ROUTER_STATE_DIR: path.join(dir, "state"),
+          MODEL_ROUTER_USER_MODELS: file,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const models = JSON.parse(readFileSync(file, "utf8")).models;
+    assert.deepEqual(models.map((model) => model.slug), [
+      "chatgpt-web/luna",
+      "chatgpt-web/light",
+      "chatgpt-web/medium",
+      "chatgpt-web/high",
+      "chatgpt-web/extra-high",
+      "chatgpt-web/pro",
+    ]);
+    // The window comes from the bridge's own configuration, so a curated row
+    // is sized by what the bridge says it serves rather than a guess.
+    for (const model of models) {
+      assert.equal(model.contextWindow, 256_000);
+      assert.deepEqual(model.inputModalities, ["text", "image"]);
+      // The label is the one the bridge's own catalog would have shown, which
+      // is why the route table carries it: there is no live catalog to read.
+      assert.match(model.displayName, /^ChatGPT Web — /);
+    }
+    // Each route keeps the effort its ChatGPT row is fixed to.
+    const byslug = new Map(models.map((model) => [model.slug, model]));
+    assert.equal(byslug.get("chatgpt-web/light").defaultEffort, "low");
+    assert.equal(byslug.get("chatgpt-web/medium").defaultEffort, "medium");
+    assert.equal(byslug.get("chatgpt-web/extra-high").defaultEffort, "xhigh");
+    assert.equal(byslug.get("chatgpt-web/pro").defaultEffort, "ultra");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

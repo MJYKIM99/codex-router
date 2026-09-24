@@ -226,30 +226,37 @@ const CURATION_ROUTES = Object.freeze({
     ]),
     models: Object.freeze({
       "chatgpt-web/luna": Object.freeze({
+        displayName: "ChatGPT Web — Luna",
         reasoningLevels: Object.freeze(["low"]),
         summary: "ChatGPT Web Luna through the account-bound local browser bridge.",
       }),
       "chatgpt-web/think": Object.freeze({
+        displayName: "ChatGPT Web — Think",
         reasoningLevels: Object.freeze(["low"]),
         summary: "ChatGPT Web Think through the account-bound local browser bridge.",
       }),
       "chatgpt-web/light": Object.freeze({
+        displayName: "ChatGPT Web — Instant",
         reasoningLevels: Object.freeze(["low"]),
         summary: "ChatGPT Web Instant through the account-bound local browser bridge.",
       }),
       "chatgpt-web/medium": Object.freeze({
+        displayName: "ChatGPT Web — Medium",
         reasoningLevels: Object.freeze(["medium"]),
         summary: "ChatGPT Web Medium through the account-bound local browser bridge.",
       }),
       "chatgpt-web/high": Object.freeze({
+        displayName: "ChatGPT Web — High",
         reasoningLevels: Object.freeze(["high"]),
         summary: "ChatGPT Web High through the account-bound local browser bridge.",
       }),
       "chatgpt-web/extra-high": Object.freeze({
+        displayName: "ChatGPT Web — Extra High",
         reasoningLevels: Object.freeze(["xhigh"]),
         summary: "ChatGPT Web Extra High through the account-bound local browser bridge.",
       }),
       "chatgpt-web/pro": Object.freeze({
+        displayName: "ChatGPT Web — Pro",
         reasoningLevels: Object.freeze(["ultra"]),
         summary: "ChatGPT Web Pro through the account-bound local browser bridge.",
       }),

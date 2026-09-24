@@ -30,6 +30,10 @@ export function chatgptWebJournalPath(environment = process.env) {
   return path.join(chatgptWebHome(environment), "codex", "integration-journal.json");
 }
 
+export function chatgptWebConfigPath(environment = process.env) {
+  return path.join(chatgptWebHome(environment), "config.json");
+}
+
 // Both programs compute the profile path separately, so either side can carry
 // a `~`, a symlink, or a different case for the same file. A mismatch reads as
 // "aimed somewhere else", which is the answer that lets the router stay quiet,
@@ -56,6 +60,40 @@ export function sameCodexProfile(left, right) {
   return process.platform === "win32"
     ? leftPath.toLowerCase() === rightPath.toLowerCase()
     : leftPath === rightPath;
+}
+
+// The bridge's own configuration is where the window it serves is declared, so
+// curation can size a web route from the bridge instead of guessing. Read with
+// the same regular-file and size bound as the journal: this is another
+// program's document, and a diagnostic or a curation run must not hang on it.
+export function readChatgptWebBridgeConfig({
+  environment = process.env,
+  configPath = chatgptWebConfigPath(environment),
+} = {}) {
+  let stats;
+  try {
+    stats = statSync(configPath);
+  } catch {
+    return undefined;
+  }
+  if (!stats.isFile() || stats.size > MAX_JOURNAL_BYTES) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const contextWindow = Number(parsed.contextWindow);
+  const mode = typeof parsed.mode === "string" ? parsed.mode : undefined;
+  return {
+    mode,
+    contextWindow: Number.isInteger(contextWindow) && contextWindow > 0 ? contextWindow : undefined,
+    // Browser-only and full both carry images through the browser turn; nothing
+    // else is advertised to Codex for these routes.
+    carriesImages: mode === "browser-only" || mode === "full",
+    configPath,
+  };
 }
 
 // Route spellings differ by a trailing slash or by writing the loopback host
