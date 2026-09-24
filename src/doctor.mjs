@@ -11,7 +11,12 @@ import { grokCliPreflight } from "./grok-cli.mjs";
 import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { routedCatalogConfigured } from "./catalog.mjs";
 import { nativeCatalogVersionDrift } from "./native-catalog-freshness.mjs";
-import { readNativeCatalogSource } from "./native-catalog-source.mjs";
+import { readNativeCatalogSource, readRootStringValues } from "./native-catalog-source.mjs";
+import {
+  chatgptWebHome,
+  chatgptWebOwnershipVerdict,
+  readChatgptWebRouteClaim,
+} from "./chatgpt-web-launcher.mjs";
 import {
   MODEL_BY_SLUG,
   MODELS,
@@ -385,6 +390,74 @@ if (codexTarget) {
       ? "Codex cannot start until this line is fixed or removed; the message above names the file and line."
       : undefined,
   );
+}
+// The router and codex-chatgpt-web both want Codex's single `openai_base_url`,
+// and the launcher's setup/repair/upgrade buttons write whichever config.toml
+// its journal names. That journal is the only place the disagreement is
+// visible before it happens, so read it rather than waiting for the route to
+// be taken. Nothing here launches the launcher or reads its credential.
+if (codexTarget) {
+  const claim = readChatgptWebRouteClaim({ configPath: CONFIG_PATH });
+  const verdict = chatgptWebOwnershipVerdict({
+    claim,
+    codexBaseUrls: existsSync(CONFIG_PATH)
+      ? readRootStringValues(readFileSync(CONFIG_PATH, "utf8"), "openai_base_url")
+      : [],
+  });
+  if (verdict.state === "taken-over") {
+    add(
+      "fail",
+      "ChatGPT Web launcher",
+      `its Codex integration is active and its route ${redactCallerUrl(claim.claimedBaseUrl)} is the one ${CONFIG_PATH} uses`,
+      "Codex is not reaching the router. Run `codex-chatgpt-web route disconnect` to hand the route back, then ./bin/refresh-catalog; or give the launcher a home of its own so it never targets this profile.",
+    );
+  } else if (verdict.state === "latent") {
+    add(
+      "warn",
+      "ChatGPT Web launcher",
+      `its Codex integration is active and still targets ${CONFIG_PATH}; its next repair or upgrade will re-assert that route`,
+      "Give the launcher a home of its own (`CODEX_HOME=$HOME/.codex-cgw codex-chatgpt-web setup`) so its buttons write that profile instead of this one.",
+    );
+  } else if (verdict.state === "disconnected") {
+    add(
+      "warn",
+      "ChatGPT Web launcher",
+      `its journal still targets ${CONFIG_PATH} from an earlier install, so reconnecting it would take the route back`,
+      "Give the launcher a home of its own (`CODEX_HOME=$HOME/.codex-cgw codex-chatgpt-web setup`), or remove its Codex integration entirely.",
+    );
+  } else if (verdict.state === "unverifiable") {
+    add(
+      "warn",
+      "ChatGPT Web launcher",
+      `${claim.journalPath} records no Codex profile, so nothing says which config.toml its setup or repair would write`,
+      "Re-run the launcher's Setup so it records its target, or delete that file if the launcher is uninstalled.",
+    );
+  } else if (verdict.state === "unreadable") {
+    add(
+      "warn",
+      "ChatGPT Web launcher",
+      `${claim.journalPath} is not a readable integration journal`,
+      "Re-run the launcher's Setup, or delete that file if the launcher is uninstalled.",
+    );
+  } else if (verdict.state === "other-profile") {
+    add(
+      "ok",
+      "ChatGPT Web launcher",
+      `active for ${claim.claimedConfigPath}, not this profile`,
+      undefined,
+    );
+  } else {
+    add(
+      "ok",
+      "ChatGPT Web launcher",
+      claim.installed
+        ? "installed and inactive"
+        : claim.homePresent
+          ? `installed, but it has never installed its Codex route integration (no ${claim.journalPath})`
+          : `not installed (${chatgptWebHome()})`,
+      undefined,
+    );
+  }
 }
 // Gemini and DSH still carry the caller capability in their private documents.
 // Modern Codex providers obtain it from an auth command instead, so Codex's

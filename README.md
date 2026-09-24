@@ -1604,6 +1604,43 @@ port but a non-loopback override is refused. The upstream project is unofficial
 browser automation, so its own security notes, platform support, OpenAI terms,
 and workspace policies still apply.
 
+#### Keeping two Codex route owners apart
+
+Codex has exactly one `openai_base_url`, and both programs want it. The router
+owns the profile you use every day, and the launcher writes whichever
+`config.toml` its journal names, so the only rule is that its setup, repair, and
+upgrade must not run against that profile:
+
+```sh
+# Before you ever re-run the launcher's Setup, Repair, or Upgrade:
+CODEX_HOME="$HOME/.codex-cgw" codex-chatgpt-web setup
+```
+
+The launcher's own home (`~/.codex-chatgpt-web`) is independent of `CODEX_HOME`,
+so it is still one launcher: the browser session and the bridge on 17841 serve
+the router's `chatgpt-web` provider, and that provider is what puts web models
+in the same Codex list as every other model. The `~/.codex-cgw` profile exists
+only to give the launcher's buttons somewhere harmless to write; you do not
+have to run Codex against it, and the desktop app cannot, since it reads
+`~/.codex` from the environment it was launched with.
+
+`doctor` reports this as **ChatGPT Web launcher**:
+
+- `not installed`, `installed, but it has never installed its Codex route
+  integration`, `installed and inactive`, or `active for <another profile>` —
+  the router owns this profile; nothing to do. The second of those is the
+  normal state for a launcher used only as a browser sidecar.
+- `still targets <config.toml>` — the launcher's integration names the profile
+  the router serves, so its next repair or upgrade will re-assert that route.
+  Move it with the isolated `setup` command above.
+- `records no Codex profile`, or the journal cannot be read — a warning rather
+  than good news, because nothing then says which `config.toml` its setup or
+  repair would write.
+- `its route <url> is the one <config.toml> uses` — Codex is bypassing the
+  router right now. Run `codex-chatgpt-web route disconnect` to hand the route
+  back, then `./bin/refresh-catalog`. `doctor --fix` will not do this for you:
+  it refuses to overwrite an `openai_base_url` it does not own.
+
 ### Use a local model in Codex (experimental)
 
 LM Studio can run as a second local backend alongside Ollama. Its models use
