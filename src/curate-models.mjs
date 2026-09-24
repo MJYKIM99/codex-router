@@ -515,6 +515,21 @@ async function main() {
       ...(flagEfforts || {}),
       ...(discovery.free?.includes(id) ? { isFree: true } : {}),
     };
+    // The ChatGPT Web launcher owns these catalog rows and derives them from
+    // the signed-in account. Its clean labels and input modalities are part of
+    // the same local contract as the account-gated model ids, so preserve them
+    // instead of turning every row into a generic text-only curated model.
+    if (providerId === "chatgpt-web") {
+      const live = Array.isArray(discovery.modelMetadata)
+        ? discovery.modelMetadata.find((entry) => entry?.upstreamId === id)
+        : discovery.modelMetadata?.[id];
+      if (typeof live?.displayName === "string" && live.displayName) {
+        metadata.displayName = live.displayName;
+      }
+      if (Array.isArray(live?.inputModalities) && live.inputModalities.length) {
+        metadata.inputModalities = live.inputModalities;
+      }
+    }
     // The served catalog value wins when present. OpenCode's exact documented
     // free-model size is the fallback for its id-only Zen catalog; every other
     // silent catalog still gets the conservative generic default.
