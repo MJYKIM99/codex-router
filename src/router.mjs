@@ -257,7 +257,12 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { installedNativeVisionEngines } from "./vision-engines.mjs";
 import { ageToolResults } from "./tool-result-aging.mjs";
-import { boundImagePayload } from "./prompt-image-budget.mjs";
+import {
+  IMAGE_REJECTION_MAX_RETRIES,
+  boundImagePayload,
+  isImagePayloadRejection,
+  tighterImageBudget,
+} from "./prompt-image-budget.mjs";
 import {
   nativeToolResultAgingEnabled,
   toolResultAgingEnabled,
@@ -3008,13 +3013,31 @@ async function summarize(request, payload, route, signal, { allowFailover = true
   // decide which source types and machine outcomes enter a kcr2 checkpoint.
   const prepared = prepareCompaction(normalized);
   const agingEnabled = toolResultAgingEnabled();
-  const aged = ageToolResults(normalized, {
-    enabled: agingEnabled,
-    // The client has already decided this conversation needs compaction. Dense
-    // RTK-style shaping gives its summarizer more distinct evidence without
-    // changing ordinary turns, and every shaped result keeps the exact rerun path.
-    denseShaping: agingEnabled,
-  });
+  // Compaction replays every image the conversation still holds, and it runs
+  // exactly when the conversation is at its largest, so it is the request most
+  // likely to cross the provider's per-request image ceiling. It is reduced by
+  // the same function as a routed turn. The per-image token charge is the
+  // conversation's route; a failover hop reuses this input, and the byte budget
+  // that stops a 413 does not depend on the route.
+  const reduce = (imageLimits) => {
+    const reduced = prepareProviderInput(normalized, route, {
+      agingEnabled,
+      // The client has already decided this conversation needs compaction.
+      // Dense RTK-style shaping gives its summarizer more distinct evidence
+      // without changing ordinary turns, and every shaped result keeps the
+      // exact rerun path.
+      denseShaping: agingEnabled,
+      imageLimits,
+    });
+    // The image counts ride on the aging stats so every compaction return path
+    // meters them without each one having to carry a second field.
+    return {
+      input: reduced.input,
+      stats: { ...reduced.toolResultAging, ...reduced.imageBudget },
+    };
+  };
+  let aged = reduce();
+  let imageRetries = 0;
 
   // The models this compaction may be moved to, in order, starting with the one
   // the conversation is on. A provider already known to be empty is dropped
@@ -3109,6 +3132,20 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     // could not serve it.
     const bodyText = bytes.toString("utf8");
     failed.push({ route: attemptRoute, status: sent.upstream.status, usage });
+    // A provider that still refuses the image content gets the same model again
+    // with half of it. A refused compaction is retried by the client before
+    // every following turn, so leaving it refused stalls the session for good.
+    const imageLimits = imageRetries < IMAGE_REJECTION_MAX_RETRIES &&
+      isImagePayloadRejection({ status: sent.upstream.status, bodyText })
+      ? tighterImageBudget(aged.stats)
+      : undefined;
+    if (imageLimits && !signal?.aborted) {
+      imageRetries += 1;
+      aged = reduce(imageLimits);
+      logImageRejectionRetry(attemptRoute, "compaction", imageRetries, aged.stats);
+      index -= 1;
+      continue;
+    }
     // The first failure is the one reported if every attempt fails: it came
     // from the model the conversation is actually on, which is the one the
     // operator can do something about.
@@ -3589,6 +3626,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     const flattened = chatProviderToolSurface(tools, provider?.id, {
       input,
       toolChoice: payload.tool_choice,
+      upstreamModel: route.upstreamModel,
     });
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;
@@ -3867,31 +3905,68 @@ async function prepareRoutedRequest({
   route,
   normalizedInput,
   agingEnabled,
+  imageLimits,
 }) {
-  const aged = ageToolResults(normalizedInput, {
-    enabled: agingEnabled,
-  });
-  // A conversation replays every image it still holds, so a long session can
-  // cross the provider's per-request image ceiling on its own and fail the turn
-  // outright. Bound the payload after aging, from the same pristine input, so
-  // the body that actually leaves is one the provider accepts. The token budget
-  // is charged at this route's per-image bound, so a resold route that pays 4096
-  // tokens a screenshot is trimmed sooner than a native route that pays 1024.
-  const bounded = boundImagePayload(aged.input, {
-    tokensPerImage: maxImageTokensForRoute(route),
+  const prepared = prepareProviderInput(normalizedInput, route, {
+    agingEnabled,
+    imageLimits,
   });
   const built = await buildRoutedRequest({
     request,
     payload,
     route,
-    agedInput: bounded.input,
+    agedInput: prepared.input,
   });
   return {
     ...built,
-    agedInput: bounded.input,
+    agedInput: prepared.input,
+    toolResultAging: prepared.toolResultAging,
+    imageBudget: prepared.imageBudget,
+  };
+}
+
+// The one place a conversation is reduced before it leaves for a provider.
+// Every provider-bound path - a routed turn, each failover hop, compaction -
+// goes through here, so a new path cannot forget the image budget the way
+// compaction once did (it aged tool results, skipped the budget, and a
+// screenshot-heavy session's compaction hit OpenRouter's 413 on every retry).
+//
+// A conversation replays every image it still holds, so a long session can
+// cross the provider's per-request image ceiling on its own. The payload is
+// bounded after aging, from the same pristine input. The token budget is
+// charged at this route's per-image bound, so a resold route that pays 4096
+// tokens a screenshot is trimmed sooner than a native route that pays 1024.
+// `imageLimits` tightens the budget for a resend after a provider refused the
+// image content anyway.
+function prepareProviderInput(
+  normalizedInput,
+  route,
+  { agingEnabled, denseShaping = false, imageLimits } = {},
+) {
+  const aged = ageToolResults(normalizedInput, {
+    enabled: agingEnabled,
+    denseShaping,
+  });
+  const bounded = boundImagePayload(aged.input, {
+    ...imageLimits,
+    tokensPerImage: maxImageTokensForRoute(route),
+  });
+  return {
+    input: bounded.input,
     toolResultAging: aged.stats,
     imageBudget: bounded.stats,
   };
+}
+
+// Not gated on QUIET: a router that silently dropped screenshots the model was
+// shown would be indistinguishable from one that never had to.
+function logImageRejectionRetry(route, path, attempt, stats) {
+  console.error(
+    `[codex-router] image payload refused, resending with fewer images ` +
+      `${attempt}/${IMAGE_REJECTION_MAX_RETRIES} model=${route.slug} path=${path} ` +
+      `images=${stats.imageReferencesSeen - stats.imageReferencesDropped}/${stats.imageReferencesSeen} ` +
+      `image-bytes=${stats.imageBytesAfter}`,
+  );
 }
 
 // The models this turn could be moved to, best first. Deliberately computed
@@ -4407,17 +4482,13 @@ async function handleResponses(request, response, requestUrl) {
     // retry -- reads these, so all of them have to move together or the turn
     // would be relayed through one model's namespace map while another model
     // answered it.
-    const adoptRoute = (nextRoute, built) => {
-      failoverFrom ??= route.slug;
-      route = nextRoute;
+    // Adopts a rebuilt request for the same model - a resend with fewer images
+    // after the provider refused the image content - and is the request half of
+    // adopting another model below.
+    const adoptBuilt = (built) => {
       namespacesFlattened = built.namespacesFlattened;
       flattenedNamespaces = built.flattenedNamespaces;
       diagnostics.grokStructuredPatch = built.grokStructuredPatch;
-      // Grok OAuth ingress measurements describe the request sent to Grok. The
-      // serving row of another model must not inherit them.
-      diagnostics.contextBytes = grokOauthIngressContextBytes(payload, route);
-      diagnostics.requestedServiceTier =
-        offersGrokOauthServiceTier(route) ? payload.service_tier : undefined;
       setRoutingDiagnostics(built);
       pendingInterrupts = built.pendingInterrupts;
       agedInput = built.agedInput;
@@ -4427,6 +4498,16 @@ async function handleResponses(request, response, requestUrl) {
       headers = built.headers;
       routedBody = built.body;
       builtSearchMode = built.searchMode;
+    };
+    const adoptRoute = (nextRoute, built) => {
+      failoverFrom ??= route.slug;
+      route = nextRoute;
+      adoptBuilt(built);
+      // Grok OAuth ingress measurements describe the request sent to Grok. The
+      // serving row of another model must not inherit them.
+      diagnostics.contextBytes = grokOauthIngressContextBytes(payload, route);
+      diagnostics.requestedServiceTier =
+        offersGrokOauthServiceTier(route) ? payload.service_tier : undefined;
       // The tray Island has to name the model that is actually answering.
       activity.setRoute({
         provider: canonicalProviderId(route.provider),
@@ -4675,6 +4756,54 @@ async function handleResponses(request, response, requestUrl) {
         console.error(
           `[codex-router] routed transport retry 1/1 model=${route.slug} path=${requestUrl.pathname}`,
         );
+        upstream = await fetchObservedUpstream(target, {
+          method: "POST",
+          headers,
+          body: routedBody,
+          signal: controller.signal,
+        });
+        upstreamRetries = (upstreamRetries || 0) + 1;
+        upstreamStatus = upstream.status;
+        upstreamLatencyMs = Date.now() - startedAt;
+        failedBodyText = upstream.ok
+          ? undefined
+          : await boundedResponseText(
+              upstream,
+              MAX_BUFFERED_RESPONSE_BYTES,
+              controller.signal,
+            );
+        verdict = upstream.ok
+          ? { swap: false }
+          : classifyRoutedFailure({
+              status: upstream.status,
+              bodyText: failedBodyText,
+              retryAfterSeconds: retryAfterSeconds(upstream.headers),
+            });
+      }
+      // The image budget is a measurement, not the provider's contract. A
+      // provider that still refuses the image content gets the same model again
+      // with half of it, oldest first, rather than a turn the session can never
+      // get past. Nothing has been relayed, so the resend is invisible to Codex.
+      for (
+        let attempt = 1;
+        !upstream.ok &&
+        attempt <= IMAGE_REJECTION_MAX_RETRIES &&
+        nothingRelayed(response) &&
+        !controller.signal.aborted &&
+        isImagePayloadRejection({ status: upstream.status, bodyText: failedBodyText });
+        attempt += 1
+      ) {
+        const imageLimits = tighterImageBudget(imageBudget);
+        if (!imageLimits) break;
+        adoptBuilt(await prepareRoutedRequest({
+          request,
+          payload,
+          route,
+          normalizedInput,
+          agingEnabled,
+          imageLimits,
+        }));
+        logImageRejectionRetry(route, requestUrl.pathname, attempt, imageBudget);
         upstream = await fetchObservedUpstream(target, {
           method: "POST",
           headers,
