@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import net from "node:net";
+import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 
@@ -62,9 +63,9 @@ export function sameCodexProfile(left, right) {
     : leftPath === rightPath;
 }
 
-// The bridge's own configuration is where the window it serves is declared, so
-// curation can size a web route from the bridge instead of guessing. Read with
-// the same regular-file and size bound as the journal: this is another
+// Saved capabilities select a versioned model contract; the generic window
+// alone is not a per-model budget. Read with the same bound as the journal:
+// this is another
 // program's document, and a diagnostic or a curation run must not hang on it.
 export function readChatgptWebBridgeConfig({
   environment = process.env,
@@ -87,11 +88,15 @@ export function readChatgptWebBridgeConfig({
   const contextWindow = Number(parsed.contextWindow);
   const mode = typeof parsed.mode === "string" ? parsed.mode : undefined;
   return {
+    version: Number.isSafeInteger(parsed.version) ? parsed.version : undefined,
+    releaseVersion: typeof parsed.releaseVersion === "string" ? parsed.releaseVersion : undefined,
+    browserInteractionMode: typeof parsed.browserInteractionMode === "string" ? parsed.browserInteractionMode : undefined,
+    subagentProtocol: typeof parsed.subagentProtocol === "string" ? parsed.subagentProtocol : undefined,
+    ...Object.fromEntries(["solAvailable", "proAvailable", "extraHighAvailable", "experimentalBiggerContext", "zeroRiskProEnabled"]
+      .map(key => [key, typeof parsed[key] === "boolean" ? parsed[key] : undefined])),
     mode,
     contextWindow: Number.isInteger(contextWindow) && contextWindow > 0 ? contextWindow : undefined,
-    // Browser-only and full both carry images through the browser turn; nothing
-    // else is advertised to Codex for these routes.
-    carriesImages: mode === "browser-only" || mode === "full",
+    carriesImages: parsed.browserInteractionMode !== "manual" && (mode === "browser-only" || mode === "full"),
     configPath,
   };
 }
@@ -197,36 +202,74 @@ export function bridgeAddress(baseUrl) {
     const url = new URL(String(baseUrl));
     const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
     if (!url.hostname || !Number.isInteger(port) || port <= 0 || port > 65_535) return null;
-    return { host: url.hostname, port };
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+    return { host: url.hostname, port, ...(url.protocol === "https:" ? { protocol: "https:" } : {}) };
   } catch {
     return null;
   }
 }
 
-// A listening check, not an HTTP request: the bridge serves /v1/models from the
-// signed-in account's own catalog and may refuse an unauthenticated call, so a
-// 401 there would say nothing about whether the port is up. What the router
-// needs to know before it offers a web model is only whether a turn would have
-// somewhere to go.
-export function probeBridgeListener({ host, port, timeoutMs = 1_000 } = {}) {
+// /healthz is unauthenticated and never starts a browser turn. An open port
+// alone cannot distinguish this bridge from an unrelated or draining process.
+// Never echo response bodies/errors: another listener may return private data.
+export function probeChatgptWebHealth({ host, port, protocol = "http:", timeoutMs = 1_000, expectedVersion } = {}) {
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)
+    || !["http:", "https:"].includes(protocol)) {
+    return Promise.resolve({ ok: false, reason: "not a supported loopback address" });
+  }
   return new Promise((resolve) => {
     let settled = false;
-    let socket = null;
-    const finish = (listening) => {
+    let request;
+    const timer = setTimeout(() => finish({ ok: false, reason: "health request timed out" }), timeoutMs);
+    const finish = (result) => {
       if (settled) return;
       settled = true;
-      if (socket) socket.destroy();
-      resolve(listening);
+      clearTimeout(timer);
+      request?.destroy();
+      resolve(result);
     };
     try {
-      socket = net.connect({ host, port });
+      request = (protocol === "https:" ? https : http).get({
+        hostname: host === "localhost" ? "127.0.0.1" : host.replace(/^\[|\]$/g, ""),
+        port, path: "/healthz", agent: false,
+      }, response => {
+        if (response.statusCode !== 200) {
+          response.destroy();
+          finish({ ok: false, reason: "health endpoint refused the request (redirects are not followed)" });
+          return;
+        }
+        const chunks = [];
+        let size = 0;
+        response.on("data", chunk => {
+          size += chunk.length;
+          if (size > 16384) {
+            response.destroy();
+            finish({ ok: false, reason: "health response is too large" });
+          } else chunks.push(chunk);
+        });
+        response.on("error", () => finish({ ok: false, reason: "health response interrupted" }));
+        response.on("end", () => {
+          let value;
+          try { value = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* invalid */ }
+          if (value?.service !== "codex-chatgpt-web" || value.status !== "ok"
+            || typeof value.version !== "string" || !/^\d+\.\d+\.\d+$/.test(value.version)
+            || typeof value.accepting_turns !== "boolean"
+            || !["full", "browser-only"].includes(value.mode)
+            || [value.active_http_turns, value.active_browser_turns].some(n => !Number.isSafeInteger(n) || n < 0)) {
+            finish({ ok: false, reason: "listener is not a recognized ChatGPT Web health endpoint" });
+            return;
+          }
+          const snapshot = { version: value.version, mode: value.mode,
+            acceptingTurns: value.accepting_turns, activeHttpTurns: value.active_http_turns,
+            activeBrowserTurns: value.active_browser_turns };
+          const reason = expectedVersion && value.version !== expectedVersion ? "bridge version differs from the configured release"
+            : !value.accepting_turns ? "bridge is draining and is not accepting turns" : undefined;
+          finish({ ok: !reason, ...snapshot, ...(reason ? { reason } : {}) });
+        });
+      });
+      request.on("error", () => finish({ ok: false, reason: "health endpoint unreachable" }));
     } catch {
-      resolve(false);
-      return;
+      finish({ ok: false, reason: "health endpoint unreachable" });
     }
-    socket.setTimeout(timeoutMs);
-    socket.once("connect", () => finish(true));
-    socket.once("timeout", () => finish(false));
-    socket.once("error", () => finish(false));
   });
 }

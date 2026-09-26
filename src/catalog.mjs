@@ -734,6 +734,13 @@ export function routedModel(template, model, behaviorTemplate = template) {
   // not a routed capability and must stay out even when that native entry is
   // also the conservative fallback template.
   delete next.tool_mode;
+  if (model.provider === "chatgpt-web") {
+    // The direct bridge owns compaction and the regular native tool surface.
+    // A synthetic router compaction hash/code-mode template is not its contract.
+    delete next.comp_hash;
+    next.tool_mode = null;
+    next.effective_context_window_percent = Math.round(model.autoCompact / model.contextWindow * 100);
+  }
   // ClinePass strips these unsupported request controls, so Codex must not
   // offer them. Codex requires `supported_reasoning_levels` (a missing key is a
   // serde error that drops the entry), so an empty ladder is the only

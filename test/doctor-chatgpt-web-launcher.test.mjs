@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import net from "node:net";
+import http from "node:http";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -41,7 +42,7 @@ function writeJournal(journalHome, journal) {
 // Every case redirects the launcher's own home too: the check reads a journal
 // written by another program, and a maintainer who really has the launcher
 // installed must not be able to change what this fixture reports.
-function runDoctor({
+async function runDoctor({
   baseUrl = routerBaseUrl,
   journal = null,
   journalHome = "fresh",
@@ -73,7 +74,7 @@ function runDoctor({
     );
   }
   if (journal) writeJournal(journalHomePath, journal(configPath));
-  const result = spawnSync(process.execPath, [path.join(root, "src", "doctor.mjs"), "--json"], {
+  const result = await promisify(execFile)(process.execPath, [path.join(root, "src", "doctor.mjs"), "--json"], {
     cwd: root,
     encoding: "utf8",
     timeout: 30_000,
@@ -89,7 +90,9 @@ function runDoctor({
       MODEL_ROUTER_STATE_DIR: stateDir,
       MODEL_ROUTER_TARGET: "codex",
     },
-  });
+  }).catch(error => ({ stdout: error.stdout, stderr: error.stderr, status: error.code }));
+  rmSync(codexHome, { recursive: true, force: true });
+  if (journalHome !== "absent") rmSync(journalHomePath, { recursive: true, force: true });
   let parsed;
   try {
     parsed = JSON.parse(result.stdout);
@@ -105,8 +108,8 @@ function runDoctor({
 test(
   "an installed launcher that never installed its Codex integration is not called absent",
   { timeout: 40_000 },
-  () => {
-    const { check } = runDoctor();
+  async () => {
+    const { check } = await runDoctor();
     assert.equal(check.status, "ok");
     assert.match(check.detail, /never installed its Codex route integration/);
   },
@@ -115,8 +118,8 @@ test(
 test(
   "no launcher at all is reported as not installed",
   { timeout: 40_000 },
-  () => {
-    const { check } = runDoctor({ journalHome: "absent" });
+  async () => {
+    const { check } = await runDoctor({ journalHome: "absent" });
     assert.equal(check.status, "ok");
     assert.match(check.detail, /^not installed \(/);
   },
@@ -125,9 +128,9 @@ test(
 test(
   "a launcher owned by its own profile is reported as healthy, not as a threat",
   { timeout: 40_000 },
-  () => {
+  async () => {
     const otherProfile = path.join(os.tmpdir(), "codex-router-cgw-self", "config.toml");
-    const { check } = runDoctor({
+    const { check } = await runDoctor({
       journal: () => ({
         version: 10,
         active: true,
@@ -143,8 +146,8 @@ test(
 test(
   "a launcher still targeting the router's own profile warns before it takes the route",
   { timeout: 40_000 },
-  () => {
-    const { check } = runDoctor({
+  async () => {
+    const { check } = await runDoctor({
       journal: (configPath) => ({
         version: 10,
         active: true,
@@ -160,8 +163,8 @@ test(
 test(
   "a journal that names no profile warns instead of reporting health",
   { timeout: 40_000 },
-  () => {
-    const { check } = runDoctor({
+  async () => {
+    const { check } = await runDoctor({
       journal: () => ({
         version: 10,
         active: true,
@@ -176,8 +179,8 @@ test(
 test(
   "a disconnected journal that still targets this profile warns",
   { timeout: 40_000 },
-  () => {
-    const { check } = runDoctor({
+  async () => {
+    const { check } = await runDoctor({
       journal: (configPath) => ({
         version: 10,
         active: false,
@@ -193,8 +196,8 @@ test(
 test(
   "a live takeover fails, and the check never prints the caller capability",
   { timeout: 40_000 },
-  () => {
-    const { check, stdout } = runDoctor({
+  async () => {
+    const { check, stdout } = await runDoctor({
       // A journal can record any baseline, including the router's own
       // capability-bearing URL. Matching it against the live route is the
       // takeover path, and it is the one path that echoes a route back -- the
@@ -214,8 +217,8 @@ test(
 test(
   "one route written two ways is still a takeover",
   { timeout: 40_000 },
-  () => {
-    const { check } = runDoctor({
+  async () => {
+    const { check } = await runDoctor({
       journal: (configPath) => ({
         version: 10,
         active: true,
@@ -231,8 +234,8 @@ test(
 test(
   "a router that is not offering web models does not pay for a bridge probe",
   { timeout: 40_000 },
-  () => {
-    const { bridge } = runDoctor({ enabledProviders: ["deepseek"] });
+  async () => {
+    const { bridge } = await runDoctor({ enabledProviders: ["deepseek"] });
     assert.equal(bridge, undefined, "the probe ran without chatgpt-web selected");
   },
 );
@@ -243,11 +246,15 @@ test(
   async () => {
     // Something is listening: the check says which address it found, so an
     // operator can see it is their own bridge and not a leftover process.
-    const server = net.createServer(() => {});
+    const server = http.createServer((req, res) => {
+      assert.equal(req.url, "/healthz");
+      res.end(JSON.stringify({service:"codex-chatgpt-web", status:"ok", version:"6.1.0", mode:"full",
+        accepting_turns:true, active_http_turns:0, active_browser_turns:0}));
+    });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address();
     try {
-      const listening = runDoctor({
+      const listening = await runDoctor({
         enabledProviders: ["chatgpt-web"],
         bridgeUrl: `http://127.0.0.1:${port}/v1`,
       });
@@ -258,12 +265,12 @@ test(
     }
 
     // And nothing listening is a warning, not a silent first-turn failure.
-    const stopped = runDoctor({
+    const stopped = await runDoctor({
       enabledProviders: ["chatgpt-web"],
       bridgeUrl: `http://127.0.0.1:${port}/v1`,
     });
     assert.equal(stopped.bridge?.status, "warn");
-    assert.match(stopped.bridge.detail, /nothing is listening/);
+    assert.match(stopped.bridge.detail, /health endpoint unreachable/);
     assert.match(stopped.bridge.fix, /codex-chatgpt-web serve/);
   },
 );

@@ -223,69 +223,53 @@ test("ChatGPT Web curation preserves its live Codex catalog metadata", () => {
   }
 });
 
-test("ChatGPT Web curation asks the route table, not an endpoint that cannot answer", () => {
-  // The bridge's /v1/models merges native rows through the caller's ChatGPT
-  // bearer, which this router never sends, so a real run has no catalog to
-  // read. Succeeding here without a --fixture and without a bridge running is
-  // the assertion: nothing on this path reaches the network.
+test("ChatGPT Web curation uses versioned saved capabilities and refreshes retained model metadata", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "curate-chatgpt-web-static-"));
   const launcherHome = path.join(dir, "launcher");
   const file = path.join(dir, "user-models.json");
   mkdirSync(launcherHome, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    path.join(launcherHome, "config.json"),
-    `${JSON.stringify({ version: 3, mode: "browser-only", contextWindow: 256_000, port: 17841 })}\n`,
-    { mode: 0o600 },
-  );
+  const config = {version:3, releaseVersion:"6.1.0", mode:"full", contextWindow:256000,
+    browserInteractionMode:"automatic", subagentProtocol:"compatibility-v1",
+    solAvailable:true, proAvailable:true, extraHighAvailable:true, experimentalBiggerContext:false};
+  const saveConfig = () => writeFileSync(path.join(launcherHome, "config.json"), JSON.stringify(config));
+  saveConfig();
+  const run = (...args) => spawnSync(process.execPath, [path.join(root, "src", "curate-models.mjs"),
+    "chatgpt-web", ...args, "--no-apply"], {cwd:root, encoding:"utf8", env:{...process.env,
+      CODEX_CHATGPT_WEB_HOME:launcherHome, MODEL_ROUTER_STATE_DIR:path.join(dir,"state"),
+      MODEL_ROUTER_USER_MODELS:file}});
   try {
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.join(root, "src", "curate-models.mjs"),
-        "chatgpt-web",
-        "--models",
-        "chatgpt-web/luna,chatgpt-web/light,chatgpt-web/medium,chatgpt-web/high,chatgpt-web/extra-high,chatgpt-web/pro",
-        "--no-apply",
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CODEX_CHATGPT_WEB_HOME: launcherHome,
-          MODEL_ROUTER_STATE_DIR: path.join(dir, "state"),
-          MODEL_ROUTER_USER_MODELS: file,
-        },
-      },
-    );
+    let result = run("--models", "chatgpt-web/light,chatgpt-web/high,chatgpt-web/pro,chatgpt-web/gpt-6-pro");
     assert.equal(result.status, 0, result.stderr);
-    const models = JSON.parse(readFileSync(file, "utf8")).models;
-    assert.deepEqual(models.map((model) => model.slug), [
-      "chatgpt-web/luna",
-      "chatgpt-web/light",
-      "chatgpt-web/medium",
-      "chatgpt-web/high",
-      "chatgpt-web/extra-high",
-      "chatgpt-web/pro",
+    let models = JSON.parse(readFileSync(file, "utf8")).models;
+    assert.deepEqual(models.map(model => [model.upstreamModel, model.contextWindow, model.autoCompact, model.defaultEffort]), [
+      ["chatgpt-web/light",111193,95000,"low"], ["chatgpt-web/high",111193,95000,"high"],
+      ["chatgpt-web/pro",112193,95000,"ultra"], ["chatgpt-web/gpt-6-pro",112193,95000,"max"],
     ]);
-    // The window comes from the bridge's own configuration, so a curated row
-    // is sized by what the bridge says it serves rather than a guess.
-    for (const model of models) {
-      assert.equal(model.contextWindow, 256_000);
-      assert.deepEqual(model.inputModalities, ["text", "image"]);
-      // The label is the one the bridge's own catalog would have shown, which
-      // is why the route table carries it: there is no live catalog to read.
-      assert.match(model.displayName, /^ChatGPT Web — /);
-    }
-    // Each route keeps the effort its ChatGPT row is fixed to.
-    const byslug = new Map(models.map((model) => [model.slug, model]));
-    assert.equal(byslug.get("chatgpt-web/light").defaultEffort, "low");
-    assert.equal(byslug.get("chatgpt-web/medium").defaultEffort, "medium");
-    assert.equal(byslug.get("chatgpt-web/extra-high").defaultEffort, "xhigh");
-    assert.equal(byslug.get("chatgpt-web/pro").defaultEffort, "ultra");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+    for (const model of models) assert.deepEqual(model.inputModalities, ["text","image"]);
+    const oldIdentities = models.map(({slug,gatewayModel,upstreamModel}) => ({slug,gatewayModel,upstreamModel}));
+    const unrelated = userModelEntry({providerId:"deepseek", upstreamId:"deepseek-chat", priority:999});
+    writeFileSync(file, JSON.stringify({version:1,models:[...models,unrelated]}));
+    config.experimentalBiggerContext = true;
+    saveConfig();
+    result = run("--models", "chatgpt-web/high", "--refresh");
+    assert.equal(result.status, 0, result.stderr);
+    models = JSON.parse(readFileSync(file, "utf8")).models;
+    assert.deepEqual(models.find(model=>model.provider==="deepseek"), unrelated);
+    const web = models.filter(model=>model.provider==="chatgpt-web");
+    assert.deepEqual(web.map(({slug,gatewayModel,upstreamModel}) => ({slug,gatewayModel,upstreamModel})),oldIdentities);
+    assert.equal(web[0].contextWindow, 333579);
+    assert.equal(web[0].autoCompact, 285000);
+    const before = readFileSync(file,"utf8");
+    result = run("--models", "chatgpt-web/luna");
+    assert.notEqual(result.status, 0, "Sol accounts must not be offered Luna-only routes");
+    assert.equal(readFileSync(file,"utf8"),before);
+    config.releaseVersion="6.2.0";
+    saveConfig();
+    result = run("--models", "chatgpt-web/high", "--refresh");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /verified 6.1.0/);
+    assert.equal(readFileSync(file,"utf8"),before,"an unknown upgrade must preserve working routes");
+  } finally { rmSync(dir, {recursive:true,force:true}); }
 });
 
 test("Command Code curation accepts only its exact certified Chat and Messages routes", () => {

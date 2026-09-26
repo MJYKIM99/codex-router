@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import net from "node:net";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -10,7 +10,7 @@ import {
   chatgptWebHome,
   chatgptWebJournalPath,
   chatgptWebOwnershipVerdict,
-  probeBridgeListener,
+  probeChatgptWebHealth,
   readChatgptWebRouteClaim,
   sameCodexProfile,
 } from "../src/chatgpt-web-launcher.mjs";
@@ -202,18 +202,61 @@ test("one profile written two ways is one profile", () => {
 
 test("the bridge address is taken from the route the router would use", () => {
   assert.deepEqual(bridgeAddress("http://127.0.0.1:17841/v1"), { host: "127.0.0.1", port: 17841 });
-  assert.deepEqual(bridgeAddress("https://bridge.example/v1"), { host: "bridge.example", port: 443 });
+  assert.deepEqual(bridgeAddress("https://bridge.example/v1"), { host: "bridge.example", port: 443, protocol: "https:" });
   // A refusal to answer is the right answer for a value the router cannot use.
   assert.equal(bridgeAddress("not a url"), null);
   assert.equal(bridgeAddress(""), null);
   assert.equal(bridgeAddress(undefined), null);
 });
 
-test("the listening check sees a real listener and a closed port", async () => {
-  const server = net.createServer(() => {});
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
-  assert.equal(await probeBridgeListener({ host: "127.0.0.1", port, timeoutMs: 500 }), true);
-  await new Promise((resolve) => server.close(resolve));
-  assert.equal(await probeBridgeListener({ host: "127.0.0.1", port, timeoutMs: 500 }), false);
+const healthy = {service:"codex-chatgpt-web", status:"ok", version:"6.1.0", mode:"full",
+  accepting_turns:true, active_http_turns:0, active_browser_turns:0};
+
+test("health verifies service identity, readiness, version and bounded responses without credentials", async () => {
+  let body = healthy;
+  let status = 200;
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, "/healthz");
+    assert.equal(req.headers.authorization, undefined);
+    res.writeHead(status, {Location:"https://example.invalid/must-not-follow"});
+    res.end(JSON.stringify(body));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = {host:"127.0.0.1", port:server.address().port, timeoutMs:500, expectedVersion:"6.1.0"};
+  try {
+    assert.equal((await probeChatgptWebHealth(address)).ok, true);
+    for (const patch of [{service:"other"}, {accepting_turns:false}, {version:"6.2.0"},
+      {active_browser_turns:-1}, {accepting_turns:undefined}]) {
+      body = {...healthy, ...patch};
+      assert.equal((await probeChatgptWebHealth(address)).ok, false);
+    }
+    body = {...healthy, secret:"PRIVATE_VALUE", service:"other"};
+    assert.equal(JSON.stringify(await probeChatgptWebHealth(address)).includes("PRIVATE_VALUE"), false);
+    body = "x".repeat(17000);
+    assert.match((await probeChatgptWebHealth(address)).reason, /too large/);
+    status = 302;
+    body = healthy;
+    assert.equal((await probeChatgptWebHealth(address)).ok, false);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+  assert.equal((await probeChatgptWebHealth(address)).ok, false);
+  assert.equal((await probeChatgptWebHealth({...address, host:"example.com"})).ok, false);
+});
+
+test("health timeout is absolute even if a listener keeps sending bytes", async () => {
+  const timers = new Set();
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    const timer = setInterval(() => res.write(" "), 5);
+    timers.add(timer);
+    res.on("close", () => { clearInterval(timer); timers.delete(timer); });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const health = await probeChatgptWebHealth({host:"127.0.0.1", port:server.address().port, timeoutMs:50});
+    assert.match(health.reason, /timed out/);
+  } finally {
+    for (const timer of timers) clearInterval(timer);
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
 });

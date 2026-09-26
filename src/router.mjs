@@ -4388,7 +4388,8 @@ async function handleResponses(request, response, requestUrl) {
     // the budget is judged on the bytes that actually go upstream and so the
     // checkpoint below reuses the one pass rather than repeating it.
     const skipNormalized =
-      route && compactV2 ? normalizeRoutedInput(payload.input.slice(0, -1)) : undefined;
+      route && !directResponses && compactV2
+        ? normalizeRoutedInput(payload.input.slice(0, -1)) : undefined;
     const skipEstimatedTokens = skipNormalized
       ? skippableCompactionTokens(skipNormalized, route)
       : undefined;
@@ -5020,6 +5021,12 @@ async function handleResponses(request, response, requestUrl) {
             : undefined,
       });
       const transforms = [activity.progress.byteObserver(), usageObserver];
+      // The browser bridge owns Responses, tool authority and opaque history.
+      // Observe its bytes without applying gateway repairs, tool injection or
+      // text cleanup: those alter valid native envelopes and ocx1 checkpoints.
+      if (directResponses) {
+        return { transforms, usageObserver, guard: undefined, leakedToolCalls: undefined };
+      }
       // LiteLLM's Chat Completions bridge can stream assistant text after a
       // reasoning item with no message envelope, on the reasoning item's own
       // output index (Z.ai GLM-5.3, OpenRouter MiMo). Codex logs every such

@@ -1574,7 +1574,7 @@ plane.
 Install and open the upstream launcher, sign in inside its embedded browser,
 and pass its browser smoke test. **Do not press its Install models action**:
 that action points Codex directly at port 17841 and replaces the router's
-managed base URL. Leave the launcher running, then enable and curate the live,
+managed base URL. Leave the launcher running, then enable and curate the
 account-specific rows through this repository:
 
 ```sh
@@ -1582,12 +1582,23 @@ account-specific rows through this repository:
 ./bin/curate-models chatgpt-web --refresh
 ```
 
-Curation reads the launcher's loopback `/v1/models` catalog, discards every
-native GPT row, and offers only the `chatgpt-web/*` models the signed-in account
-currently exposes. A chosen route keeps its fixed ChatGPT effort and advertised
-context/image metadata. The request path goes directly from the router to the
+Curation supports the **6.1.0** bridge contract and reads only whitelisted
+capability fields from its saved configuration. It does not call `/v1/models`,
+which requires a ChatGPT bearer that the router must not give the launcher.
+The saved Sol/Pro/Extra High, interaction mode, and Bigger Context settings
+determine model IDs, effort choices, image support, and per-model compaction
+budgets. This is a saved capability snapshot, not a live sign-in or quota check.
+The launcher's generic `contextWindow` is not a model's usable context window.
+`--refresh` also updates existing Web rows while preserving their IDs and
+unrelated providers. Unavailable old rows remain available for explicit removal;
+hide them from the picker when retaining their identities for old tasks.
+Unknown Web versions refuse curation without changing existing routes.
+
+The request path goes directly from the router to the
 loopback bridge so Codex's native tool, collaboration, image, and compaction
-envelope is not translated by LiteLLM. The user's Codex/ChatGPT bearer token is
+envelope is not translated by LiteLLM. The bridge owns both compaction protocols
+and its `ocx1` history; Router observes usage and cancellation without rewriting
+response events, tool calls, literal text, or opaque history. The user's Codex/ChatGPT bearer token is
 never sent to the launcher; the local hop receives only a non-secret placeholder.
 
 Browser-only mode works with no additional router credential. For the full
@@ -1613,7 +1624,8 @@ upgrade must not run against that profile:
 
 ```sh
 # Before you ever re-run the launcher's Setup, Repair, or Upgrade:
-CODEX_HOME="$HOME/.codex-cgw" codex-chatgpt-web setup
+CODEX_HOME="$HOME/.codex-cgw" codex-chatgpt-web setup --full
+# Or choose --browser-only if you do not want the full tool harness.
 ```
 
 The launcher's own home (`~/.codex-chatgpt-web`) is independent of `CODEX_HOME`,
@@ -1623,6 +1635,21 @@ in the same Codex list as every other model. The `~/.codex-cgw` profile exists
 only to give the launcher's buttons somewhere harmless to write; you do not
 have to run Codex against it, and the desktop app cannot, since it reads
 `~/.codex` from the environment it was launched with.
+
+Use the same isolated `CODEX_HOME` for every launcher entry point, including
+Dock/Finder launches. Full-mode follow-up turns may need the main profile's
+session records: preserve an existing `.codex-cgw/sessions` link to
+`.codex/sessions`; never replace a real sessions directory or copy credentials
+as a shortcut. The router does not create or modify the launcher's profile.
+
+Before upgrading a locally patched launcher, record the app/runtime version,
+the runtime helper and manifest hashes, and the source patches. Preserve the
+working app and its reapply mechanism until the new version passes the browser
+and tool checks. Do not overwrite a patched installation with an unreviewed
+vendor bundle. Router upgrades can be deployed independently while the working
+launcher stays running. A future Web version needs a reviewed capability and
+wire-contract update; the pinned contract does not promise compatibility with
+unseen releases.
 
 `doctor` reports this as **ChatGPT Web launcher**:
 
@@ -1640,6 +1667,15 @@ have to run Codex against it, and the desktop app cannot, since it reads
   router right now. Run `codex-chatgpt-web route disconnect` to hand the route
   back, then `./bin/refresh-catalog`. `doctor --fix` will not do this for you:
   it refuses to overwrite an `openai_base_url` it does not own.
+
+When selected, **ChatGPT Web bridge** checks the bounded, unauthenticated
+`/healthz` response for service identity, version, readiness and active turns.
+An unrelated open port, a draining bridge or a version mismatch warns. It never
+starts a browser turn, follows a redirect, or probes account entitlement.
+**ChatGPT Web capabilities** identifies unsupported versions and stale curated
+metadata separately. Both checks appear in the existing Control Center doctor
+results. Browser sign-in, MCP permissions and real tool execution still need
+the launcher's own explicit checks.
 
 #### Which ChatGPT account a web turn runs as
 

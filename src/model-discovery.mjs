@@ -30,6 +30,8 @@ import {
 } from "./opencode-session.mjs";
 import { providerCatalogRouteIds } from "./provider-catalogs.mjs";
 import { readUserModels } from "./user-models.mjs";
+import { readChatgptWebBridgeConfig } from "./chatgpt-web-launcher.mjs";
+import { chatgptWebDiscovery } from "./chatgpt-web-capabilities.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
 import { VERSION } from "./version.mjs";
 import {
@@ -372,6 +374,12 @@ export async function discoverProviderModels(
 ) {
   const provider = RUNTIME_PROVIDERS.get(providerId);
   if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+  if (providerId === "chatgpt-web" && !fixture && !fixturePayload && !fixturePath && !option("--fixture")) {
+    // Discovery and curation share the same saved contract. /v1/models needs
+    // an account bearer which must never cross from Codex to the browser.
+    return chatgptWebDiscovery(readChatgptWebBridgeConfig(),
+      readUserModels().filter(model => model.provider === providerId).map(model => model.upstreamModel));
+  }
   if (provider.protocol === "vertex") {
     const cliFixture = option("--fixture");
     return discoverVertexProviderModels(provider, {

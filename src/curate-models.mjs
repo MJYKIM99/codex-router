@@ -28,12 +28,12 @@ import {
   curatedModelContextLength,
   curatedModelDescription,
   curatedModelInputModalities,
-  curatedModelIds,
   curatedModelProviderId,
   curatedModelReasoningLevels,
   curatedModelRequestProfile,
 } from "./opencode-curation.mjs";
 import { readChatgptWebBridgeConfig } from "./chatgpt-web-launcher.mjs";
+import { chatgptWebDiscovery } from "./chatgpt-web-capabilities.mjs";
 import {
   applyModelOverlayPublication,
   transactModelOverlayMutation,
@@ -153,29 +153,12 @@ export function curatedSizing(contextLength) {
 // that bridge merges the caller's own ChatGPT rows into /v1/models -- so
 // reading it requires the caller's ChatGPT bearer, which this router
 // deliberately never hands to a same-user process. Asking would only ever
-// return an authentication failure, so the route table is the authority: the
-// checked-in ids (the same table that documents each route's effort ladder),
-// sized by the window the bridge itself declares for the turns it serves.
+// return an authentication failure. Instead use a versioned contract and the
+// launcher's saved account capabilities. Neither
+// its generic contextWindow nor the old static aliases define model budgets.
 function directResponsesCurationCatalog(provider) {
-  const ids = curatedModelIds(provider.id);
-  const bridge = readChatgptWebBridgeConfig();
-  const contextLengths = {};
-  const inputModalities = {};
-  for (const id of ids) {
-    if (bridge?.contextWindow) contextLengths[id] = bridge.contextWindow;
-    if (bridge?.carriesImages) inputModalities[id] = ["text", "image"];
-  }
-  return {
-    provider: provider.id,
-    discovered: [...ids],
-    registered: [],
-    unregistered: [...ids],
-    addable: [...ids],
-    blocked: {},
-    unavailable: [],
-    contextLengths,
-    inputModalities,
-  };
+  if (provider.id !== "chatgpt-web") throw new Error("No verified direct provider catalog contract.");
+  return chatgptWebDiscovery(readChatgptWebBridgeConfig());
 }
 
 function usage() {
@@ -551,10 +534,21 @@ async function main() {
   // Which models exist is decided by the provider's own /v1/models endpoint.
   // Metadata comes from that catalog, the interactive user, or the narrow
   // documented OpenCode exceptions whose catalog records omit their size.
-  // Existing curated entries are never touched.
+  // Retained Web metadata is refreshed explicitly from its versioned contract.
+  // Other providers keep their existing curated entries unchanged.
   const interactive = interactiveSelection && Boolean(process.stdin.isTTY);
 
   const metadataFor = (id) => {
+    if (directCatalog) {
+      const live = directCatalog.modelMetadata.find(model => model.upstreamId === id);
+      if (!live) throw new Error(`${id} is unavailable in the saved ChatGPT Web capabilities; its existing route is preserved.`);
+      if (flagEfforts && JSON.stringify(flagEfforts.reasoningLevels.map(level => level.effort))
+        !== JSON.stringify(live.reasoningLevels.map(level => level.effort))) {
+        throw new Error("ChatGPT Web efforts are owned by the bridge capability contract.");
+      }
+      const { upstreamId, legacy, ...metadata } = live;
+      return metadata;
+    }
     const metadata = {
       ...(flagEfforts || {}),
       ...(discovery.free?.includes(id) ? { isFree: true } : {}),
@@ -716,7 +710,9 @@ async function main() {
     (discovery.supportedModels || []).map((model) => [model.id, model]),
   );
   const nextMine = [
-    ...surviving,
+    ...surviving.map(model => directCatalog && refreshCatalog
+      && directCatalog.modelMetadata.some(entry => entry.upstreamId === model.upstreamModel)
+      ? { ...model, ...metadataFor(model.upstreamModel) } : model),
     ...additions.map((id, index) => {
       if (providerId === "vertex") {
         return userModelEntryFromCatalog({

@@ -16,9 +16,11 @@ import {
   bridgeAddress,
   chatgptWebHome,
   chatgptWebOwnershipVerdict,
-  probeBridgeListener,
+  probeChatgptWebHealth,
+  readChatgptWebBridgeConfig,
   readChatgptWebRouteClaim,
 } from "./chatgpt-web-launcher.mjs";
+import { chatgptWebModels } from "./chatgpt-web-capabilities.mjs";
 import {
   MODEL_BY_SLUG,
   MODELS,
@@ -1748,19 +1750,41 @@ add(
 if (codexTarget && selection.providers.includes("chatgpt-web")) {
   const { baseUrl, refusedOverride } = resolveProviderBaseUrl(PROVIDERS.get("chatgpt-web"));
   const address = bridgeAddress(baseUrl);
-  const listening = address ? await probeBridgeListener(address) : false;
+  const bridgeConfig = readChatgptWebBridgeConfig();
+  const bridgeHealth = address ? await probeChatgptWebHealth({
+    ...address, expectedVersion: bridgeConfig?.releaseVersion,
+  }) : { ok: false, reason: "invalid bridge address" };
   add(
-    listening ? "ok" : "warn",
+    bridgeHealth.ok ? "ok" : "warn",
     "ChatGPT Web bridge",
-    listening
-      ? `listening at ${redactCallerUrl(baseUrl)}`
+    bridgeHealth.ok
+      ? `verified service ${bridgeHealth.version} at ${redactCallerUrl(baseUrl)}; accepting turns; ${bridgeHealth.activeHttpTurns} HTTP / ${bridgeHealth.activeBrowserTurns} browser active. Browser login and tools are not probed.`
       : refusedOverride
         ? `${redactCallerUrl(refusedOverride)} is not a loopback address, so the bridge at ${redactCallerUrl(baseUrl)} is unused`
-        : `nothing is listening at ${redactCallerUrl(baseUrl)}; a chatgpt-web turn would fail on its first request`,
-    listening
+        : `${bridgeHealth.reason} at ${redactCallerUrl(baseUrl)}`,
+    bridgeHealth.ok
       ? undefined
       : "Start it with `codex-chatgpt-web serve`, or install its background service with `codex-chatgpt-web service install`.",
   );
+  try {
+    const available = chatgptWebModels(bridgeConfig);
+    const byId = new Map(available.map(model => [model.upstreamId, model]));
+    const webModels = MODELS.filter(model => model.provider === "chatgpt-web" && !hiddenModels.has(model.slug));
+    const stale = webModels.filter(model => {
+      const saved = byId.get(model.upstreamModel);
+      return !saved || ["contextWindow", "autoCompact", "defaultEffort", "inputModalities"]
+        .some(key => JSON.stringify(saved[key]) !== JSON.stringify(model[key]))
+        || JSON.stringify(saved.reasoningLevels.map(level => level.effort))
+          !== JSON.stringify(model.reasoningLevels.map(level => level.effort));
+    });
+    add(stale.length ? "warn" : "ok", "ChatGPT Web capabilities",
+      stale.length ? `${stale.length} curated route(s) differ from the saved launcher capabilities: ${stale.map(model => model.slug).join(", ")}`
+        : `6.1.0 contract; ${available.filter(model => !model.legacy).length} current models; saved account capabilities, not a live entitlement check`,
+      stale.length ? "Run ./bin/curate-models chatgpt-web --refresh; keep unavailable legacy routes only for old tasks." : undefined);
+  } catch (error) {
+    add("warn", "ChatGPT Web capabilities", error.message,
+      "Keep the working bridge version and local patches; review its contract before refreshing models.");
+  }
 }
 
 // A healthy router that no client can reach looks identical to a healthy
