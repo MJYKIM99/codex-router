@@ -1,0 +1,1 @@
+- **ChatGPT Web 6.1.1 works with the router's saved capability catalog.** The router recognizes its unchanged model and context contract, including Bigger Context, while continuing to reject unreviewed versions.

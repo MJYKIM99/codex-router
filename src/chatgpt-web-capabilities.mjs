@@ -1,7 +1,8 @@
-// Compatibility contract pinned to codex-chatgpt-web 6.1.0 (293341084ac7):
+// Compatibility contract reviewed against codex-chatgpt-web 6.1.0
+// (293341084ac7) and 6.1.1 (a13cd0995096). Both releases have identical
 // src/chatgpt-web-models.ts and src/model-catalog.ts. Its config is a saved
 // account-capability snapshot, never proof of a current browser login.
-export const CHATGPT_WEB_RELEASE = "6.1.0";
+const CHATGPT_WEB_RELEASES = new Set(["6.1.0", "6.1.1"]);
 
 export function chatgptWebDiscovery(config, registered = []) {
   const modelMetadata = chatgptWebModels(config);
@@ -14,13 +15,13 @@ export function chatgptWebDiscovery(config, registered = []) {
     contextLengths: Object.fromEntries(modelMetadata.map(model => [model.upstreamId, model.contextWindow])),
     inputModalities: Object.fromEntries(modelMetadata.map(model => [model.upstreamId, model.inputModalities])),
     modelMetadata, cached: false, stale: false,
-    note: "Verified 6.1.0 contract and saved launcher capabilities; browser sign-in and live entitlement are not probed.",
+    note: `Verified ${config.releaseVersion} contract and saved launcher capabilities; browser sign-in and live entitlement are not probed.`,
   };
 }
 
 export function chatgptWebModels(config) {
-  if (config?.releaseVersion !== CHATGPT_WEB_RELEASE || config?.version !== 3) {
-    throw new Error("ChatGPT Web curation requires a verified 6.1.0 configuration; existing routes are preserved. Review the bridge contract before upgrading.");
+  if (!CHATGPT_WEB_RELEASES.has(config?.releaseVersion) || config?.version !== 3) {
+    throw new Error("ChatGPT Web curation requires a verified 6.1.0 or 6.1.1 configuration; existing routes are preserved. Review the bridge contract before upgrading.");
   }
   if (!["full", "browser-only"].includes(config.mode)
     || !["automatic", "manual"].includes(config.browserInteractionMode)
@@ -33,7 +34,7 @@ export function chatgptWebModels(config) {
   const add = (id, displayName, efforts, defaultEffort, contextWindow, autoCompact, legacy = false) => {
     models.push({
       upstreamId: `chatgpt-web/${id}`, displayName, legacy,
-      description: `ChatGPT Web ${CHATGPT_WEB_RELEASE}; saved launcher capabilities, browser sign-in not verified.`,
+      description: `ChatGPT Web ${config.releaseVersion}; saved launcher capabilities, browser sign-in not verified.`,
       reasoningLevels: efforts.map(effort => ({ effort, description: `${displayName} — ${effort}` })),
       defaultEffort, contextWindow, autoCompact,
       inputModalities: config.browserInteractionMode === "manual" ? ["text"] : ["text", "image"],

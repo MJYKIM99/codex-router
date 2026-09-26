@@ -1582,7 +1582,7 @@ account-specific rows through this repository:
 ./bin/curate-models chatgpt-web --refresh
 ```
 
-Curation supports the **6.1.0** bridge contract and reads only whitelisted
+Curation supports the verified **6.1.0 and 6.1.1** bridge contracts and reads only whitelisted
 capability fields from its saved configuration. It does not call `/v1/models`,
 which requires a ChatGPT bearer that the router must not give the launcher.
 The saved Sol/Pro/Extra High, interaction mode, and Bigger Context settings

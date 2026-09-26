@@ -9,14 +9,14 @@ import { routedModel } from "../src/catalog.mjs";
 import { discoverProviderModels } from "../src/model-discovery.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/chatgpt-web/6.1.0.json", import.meta.url)));
-test("saved capability contract matches all 32 upstream account/context combinations", () => {
-  for (const { config, models } of fixture.cases) {
-    const actual = chatgptWebModels(config);
+test("saved capability contract matches all 32 upstream account/context combinations in both verified releases", () => {
+  for (const releaseVersion of ["6.1.0", "6.1.1"]) for (const { config, models } of fixture.cases) {
+    const actual = chatgptWebModels({ ...config, releaseVersion });
     assert.deepEqual(actual.map(model => ({
       id: model.upstreamId, efforts: model.reasoningLevels.map(level => level.effort),
       defaultEffort: model.defaultEffort, contextWindow: model.contextWindow,
       autoCompact: model.autoCompact, legacy: model.legacy,
-    })), models, JSON.stringify(config));
+    })), models, JSON.stringify({ ...config, releaseVersion }));
     for (const model of actual) {
       assert.deepEqual(model.inputModalities, config.browserInteractionMode === "manual" ? ["text"] : ["text", "image"]);
     }
