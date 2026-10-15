@@ -1779,7 +1779,7 @@ if (codexTarget && selection.providers.includes("chatgpt-web")) {
     });
     add(stale.length ? "warn" : "ok", "ChatGPT Web capabilities",
       stale.length ? `${stale.length} curated route(s) differ from the saved launcher capabilities: ${stale.map(model => model.slug).join(", ")}`
-        : `6.1.0 contract; ${available.filter(model => !model.legacy).length} current models; saved account capabilities, not a live entitlement check`,
+        : `${bridgeConfig.releaseVersion} contract; ${available.filter(model => !model.legacy).length} current models; saved account capabilities, not a live entitlement check`,
       stale.length ? "Run ./bin/curate-models chatgpt-web --refresh; keep unavailable legacy routes only for old tasks." : undefined);
   } catch (error) {
     add("warn", "ChatGPT Web capabilities", error.message,

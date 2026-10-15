@@ -48,6 +48,7 @@ async function runDoctor({
   journalHome = "fresh",
   enabledProviders = null,
   bridgeUrl = null,
+  bridgeConfig = null,
 } = {}) {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-doctor-cgw-"));
   // "fresh" is a launcher data directory that exists with no journal in it;
@@ -74,6 +75,7 @@ async function runDoctor({
     );
   }
   if (journal) writeJournal(journalHomePath, journal(configPath));
+  if (bridgeConfig) writeFileSync(path.join(journalHomePath, "config.json"), JSON.stringify(bridgeConfig), { mode: 0o600 });
   const result = await promisify(execFile)(process.execPath, [path.join(root, "src", "doctor.mjs"), "--json"], {
     cwd: root,
     encoding: "utf8",
@@ -102,8 +104,30 @@ async function runDoctor({
   const check = parsed.checks.find((entry) => entry.name === "ChatGPT Web launcher");
   assert.ok(check, `doctor did not report the launcher check: ${result.stdout}`);
   const bridge = parsed.checks.find((entry) => entry.name === "ChatGPT Web bridge");
-  return { check, bridge, configPath, stdout: result.stdout };
+  const capabilities = parsed.checks.find((entry) => entry.name === "ChatGPT Web capabilities");
+  return { check, bridge, capabilities, configPath, stdout: result.stdout };
 }
+
+test("doctor reports the reviewed 6.1.9 capability version and GPT-6 routes", { timeout: 40_000 }, async () => {
+  const server = http.createServer((_req, res) => res.end(JSON.stringify({
+    service: "codex-chatgpt-web", status: "ok", version: "6.1.9", mode: "full",
+    accepting_turns: true, active_http_turns: 0, active_browser_turns: 0,
+  })));
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const result = await runDoctor({
+      enabledProviders: ["chatgpt-web"], bridgeUrl: `http://127.0.0.1:${server.address().port}/v1`,
+      bridgeConfig: {
+        version: 3, releaseVersion: "6.1.9", mode: "full", subagentProtocol: "compatibility-v1",
+        browserInteractionMode: "automatic", solAvailable: true, proAvailable: true,
+        extraHighAvailable: true, experimentalBiggerContext: true, zeroRiskProEnabled: false,
+      },
+    });
+    assert.equal(result.bridge?.status, "ok");
+    assert.equal(result.capabilities?.status, "ok");
+    assert.match(result.capabilities.detail, /^6\.1\.9 contract; 6 current models;/);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
 
 test(
   "an installed launcher that never installed its Codex integration is not called absent",

@@ -1,8 +1,9 @@
 // Compatibility contract reviewed against codex-chatgpt-web 6.1.0
 // (293341084ac7) and 6.1.1 (a13cd0995096). Both releases have identical
-// src/chatgpt-web-models.ts and src/model-catalog.ts. Its config is a saved
+// src/chatgpt-web-models.ts and src/model-catalog.ts. 6.1.9 (c815a907a91a)
+// adds GPT-6 Sol and account/family-specific Bigger Context limits. Its config is a saved
 // account-capability snapshot, never proof of a current browser login.
-const CHATGPT_WEB_RELEASES = new Set(["6.1.0", "6.1.1"]);
+const CHATGPT_WEB_RELEASES = new Set(["6.1.0", "6.1.1", "6.1.9"]);
 
 export function chatgptWebDiscovery(config, registered = []) {
   const modelMetadata = chatgptWebModels(config);
@@ -21,7 +22,7 @@ export function chatgptWebDiscovery(config, registered = []) {
 
 export function chatgptWebModels(config) {
   if (!CHATGPT_WEB_RELEASES.has(config?.releaseVersion) || config?.version !== 3) {
-    throw new Error("ChatGPT Web curation requires a verified 6.1.0 or 6.1.1 configuration; existing routes are preserved. Review the bridge contract before upgrading.");
+    throw new Error("ChatGPT Web curation requires a verified 6.1.0, 6.1.1 or 6.1.9 configuration; existing routes are preserved. Review the bridge contract before upgrading.");
   }
   if (!["full", "browser-only"].includes(config.mode)
     || !["automatic", "manual"].includes(config.browserInteractionMode)
@@ -30,6 +31,7 @@ export function chatgptWebModels(config) {
       .some(key => typeof config[key] !== "boolean")) {
     throw new Error("ChatGPT Web capability configuration is incomplete; refresh it in the launcher before curating models.");
   }
+  const current = config.releaseVersion === "6.1.9";
   const models = [];
   const add = (id, displayName, efforts, defaultEffort, contextWindow, autoCompact, legacy = false) => {
     models.push({
@@ -44,23 +46,38 @@ export function chatgptWebModels(config) {
     if (config.experimentalBiggerContext || typeof config.zeroRiskProEnabled !== "boolean") {
       throw new Error("ChatGPT Web manual mode requires an explicit Pro setting and does not support Bigger Context.");
     }
-    add("zero-risk", "ChatGPT Web — Manual", ["low"], "low", 123000, 96000);
-    if (config.zeroRiskProEnabled) add("zero-risk-pro", "ChatGPT Web — Manual Pro", ["low"], "low", 336579, 285000);
+    add("zero-risk", current ? "ChatGPT Web — Zero Risk" : "ChatGPT Web — Manual", ["low"], "low", 123000, 96000);
+    if (config.zeroRiskProEnabled) add("zero-risk-pro", current ? "ChatGPT Web — Zero Risk Pro" : "ChatGPT Web — Manual Pro", ["low"], "low", 336579, 285000);
     return models;
   }
   if (!config.solAvailable) {
-    add("gpt-5.6-luna", "GPT-5.6 Luna (Web)", ["low", "medium"], "low", 1050000, 1050000);
-    add("luna", "ChatGPT Web — Luna", ["low"], "low", 1050000, 1050000, true);
-    add("think", "ChatGPT Web — Think", ["low"], "low", 1050000, 1050000, true);
+    const bigger = current && config.experimentalBiggerContext;
+    const window = bigger ? 84000 : 1050000;
+    const compact = bigger ? 59424 : 1050000;
+    add("gpt-5.6-luna", current ? "Luna (Web)" : "GPT-5.6 Luna (Web)", ["low", "medium"], "low", window, compact);
+    add("luna", "ChatGPT Web — Luna", ["low"], "low", window, compact, true);
+    add("think", "ChatGPT Web — Think", ["low"], "low", window, compact, true);
     return models;
   }
   const multiplier = config.experimentalBiggerContext ? 3 : 1;
-  const addSol = (id, label, efforts, effort, legacy = false) => {
+  const addSol = (id, label, efforts, effort, legacy = false, family) => {
     const proMode = effort === "max" || effort === "ultra";
     const window = config.proAvailable ? (proMode ? 112193 : 111193) : effort === "low" ? 41000 : 90000;
     const compact = config.proAvailable ? 95000 : effort === "low" ? 32000 : 80000;
-    add(id, label, efforts, effort, window * multiplier, compact * multiplier, legacy);
+    if (current && family === "6" && !proMode) {
+      if (effort === "low" || !config.experimentalBiggerContext) {
+        add(id, label, efforts, effort, window, compact, legacy);
+      } else {
+        add(id, label, efforts, effort, config.proAvailable ? 240000 : 120000, config.proAvailable ? 220000 : 110000, legacy);
+      }
+    } else {
+      add(id, label, efforts, effort, window * multiplier, compact * multiplier, legacy);
+    }
   };
+  if (current) {
+    addSol("gpt-6-sol-instant", "GPT-6 Sol Instant (Web)", ["low"], "low", false, "6");
+    addSol("gpt-6-sol", "GPT-6 Sol (Web)", config.extraHighAvailable ? ["medium", "high", "xhigh"] : ["medium", "high"], "high", false, "6");
+  }
   addSol("gpt-5.6-sol-instant", "GPT-5.6 Sol Instant (Web)", ["low"], "low");
   addSol("gpt-5.6-sol", "GPT-5.6 Sol (Web)", config.extraHighAvailable ? ["medium", "high", "xhigh"] : ["medium", "high"], "high");
   if (config.proAvailable) {

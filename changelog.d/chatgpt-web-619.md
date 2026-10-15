@@ -1,0 +1,1 @@
+- Support the reviewed ChatGPT Web 6.1.9 launcher capabilities, including GPT-6 Sol routes and its account-specific Bigger Context limits, while preserving the 6.1.0 and 6.1.1 contracts.

@@ -9,6 +9,20 @@ import { routedModel } from "../src/catalog.mjs";
 import { discoverProviderModels } from "../src/model-discovery.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/chatgpt-web/6.1.0.json", import.meta.url)));
+const currentFixture = JSON.parse(readFileSync(new URL("./fixtures/chatgpt-web/6.1.9.json", import.meta.url)));
+test("6.1.9 capability contract matches upstream GPT-6, Free and manual account/context combinations", () => {
+  for (const { config, models } of currentFixture.cases) {
+    const actual = chatgptWebModels(config);
+    assert.deepEqual(actual.map(model => ({
+      id: model.upstreamId, displayName: model.displayName,
+      efforts: model.reasoningLevels.map(level => level.effort), defaultEffort: model.defaultEffort,
+      contextWindow: model.contextWindow, autoCompact: model.autoCompact, legacy: model.legacy,
+    })), models, JSON.stringify(config));
+    for (const model of actual) {
+      assert.deepEqual(model.inputModalities, config.browserInteractionMode === "manual" ? ["text"] : ["text", "image"]);
+    }
+  }
+});
 test("saved capability contract matches all 32 upstream account/context combinations in both verified releases", () => {
   for (const releaseVersion of ["6.1.0", "6.1.1"]) for (const { config, models } of fixture.cases) {
     const actual = chatgptWebModels({ ...config, releaseVersion });
@@ -25,7 +39,7 @@ test("saved capability contract matches all 32 upstream account/context combinat
 
 test("unverified versions and incomplete capabilities do not invent a catalog", () => {
   const config = fixture.cases[0].config;
-  for (const invalid of [undefined, {}, { ...config, releaseVersion: "6.2.0" },
+  for (const invalid of [undefined, {}, { ...config, releaseVersion: "6.2.0" }, { ...config, releaseVersion: "6.1.8" },
     { ...config, solAvailable: undefined }, { ...config, mode: "unknown" },
     { ...config, browserInteractionMode: "manual", experimentalBiggerContext: true }]) {
     assert.throws(() => chatgptWebModels(invalid));
