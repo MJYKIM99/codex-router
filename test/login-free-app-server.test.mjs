@@ -349,9 +349,13 @@ async function verifySignedOutTurn(binary, { initialProvider = "openai" } = {}) 
     const notifications = await runAppServerTurn(binary, env, model, expectedProvider);
     assert.equal(requests.length, 1);
     if (upgrades.length > 0) {
-      assert.equal(upgrades.length, 1);
-      assert.equal(upgrades[0].url, "/v1/responses");
-      assert.equal(upgrades[0].headers.authorization, `Bearer ${CALLER_KEY}`);
+      // Current clients can open an idle socket alongside the generation
+      // socket. Every handshake must remain authenticated; requests.length
+      // above proves that only one generation actually reached the backend.
+      for (const upgrade of upgrades) {
+        assert.equal(upgrade.url, "/v1/responses");
+        assert.equal(upgrade.headers.authorization, `Bearer ${CALLER_KEY}`);
+      }
       assert.equal(
         requests[0].url,
         `/_codex-router/${CALLER_KEY}/v1/responses`,

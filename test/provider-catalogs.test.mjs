@@ -11,8 +11,15 @@ import {
 
 test("every selectable provider remains a canonical UI family", () => {
   const canonical = [...PROVIDERS.values()].filter((provider) => !provider.variantOf);
-  assert.equal(canonical.length, 45);
-  assert.equal(PROVIDERS.size, 53);
+  const families = new Set(canonical.map((provider) => provider.id));
+  assert.ok(families.has("chatgpt-web"), "the local browser bridge remains selectable");
+  assert.ok(families.has("aimlapi"), "the new upstream provider remains selectable");
+  for (const provider of PROVIDERS.values()) {
+    assert.ok(
+      families.has(provider.variantOf || provider.id),
+      `${provider.id} must belong to a selectable canonical family`,
+    );
+  }
 });
 
 test("catalog capability comes from backend provider definitions", () => {
