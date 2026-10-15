@@ -166,24 +166,21 @@ async function refreshNativeAccountCatalogUnlocked({
   writeCache = writePrivateJsonAsync,
   timeoutMs = ACCOUNT_CATALOG_TIMEOUT_MS,
 } = {}) {
-  const clientVersion = version || versionProvider();
-  if (!clientVersion) return { status: "unavailable" };
-
+  const resolvedVersion = version || versionProvider();
+  if (!resolvedVersion) return { status: "unavailable" };
   const current = readModelsCache(cachePath);
+  const safeCurrent = validCatalog(current.catalog) && !containsRoutedSlugs(current.catalog);
+  // Codex Desktop can write this cache with a newer bundled client than the
+  // standalone CLI the router finds. Revalidate at that known client version
+  // instead of freezing native discovery until the standalone CLI catches up.
+  // A version from a missing or router-contaminated cache is never trusted.
+  const usingCachedClientVersion = safeCurrent
+    && olderClientVersion(resolvedVersion, current.catalog.client_version);
+  const clientVersion = usingCachedClientVersion
+    ? current.catalog.client_version
+    : resolvedVersion;
   if (!force && cacheIsFresh(current.catalog, clientVersion, now)) {
     return { status: "fresh", fingerprint: current.fingerprint };
-  }
-
-  const safeCurrent = validCatalog(current.catalog) && !containsRoutedSlugs(current.catalog);
-  // models_cache.json is Codex's own cache, and this endpoint gates the model
-  // list on client_version: measured against the live endpoint, 0.150.0 is not
-  // offered gpt-6-astra while 0.153.4 is. If the Codex this router resolved is
-  // older than the client that last wrote the cache -- an outdated `codex` on
-  // PATH while the user runs a newer Codex, say -- then our answer is the
-  // poorer one, and writing it would take a model away from the Codex actually
-  // running (issue #645). Leave the richer cache alone and say why.
-  if (safeCurrent && olderClientVersion(clientVersion, current.catalog.client_version)) {
-    return { status: "stale-client", fingerprint: current.fingerprint };
   }
 
   const accountHeaders = await headersProvider();
@@ -196,7 +193,9 @@ async function refreshNativeAccountCatalogUnlocked({
   // this one would receive, so replaying it invites a 304 that pins the
   // picker to the pre-upgrade catalog for good. Revalidate only within the
   // version that issued the validator; across a version change, ask outright.
-  const etag = safeCurrent && current.catalog.client_version === clientVersion
+  // The cache may have been written before a Codex account switch. When its
+  // client version is borrowed from Desktop, ask for a full account answer.
+  const etag = safeCurrent && !usingCachedClientVersion && current.catalog.client_version === clientVersion
     ? safeEtag(current.catalog.etag)
     : undefined;
   // Keep the credential sink fixed. Tests replace the transport, never the

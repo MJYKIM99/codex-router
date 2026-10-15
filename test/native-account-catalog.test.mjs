@@ -349,30 +349,63 @@ test("a matching client_version still revalidates with its own ETag", () =>
     assert.equal(readFileSync(cachePath, "utf8"), contents);
   }));
 
-test("an older resolved Codex cannot narrow the cache a newer client wrote", () =>
+test("an older standalone Codex refreshes at the newer desktop cache version", () =>
   withCache(async (cachePath) => {
     // Measured against the live endpoint: client_version 0.150.0 is not
     // offered gpt-6-astra while 0.153.4 is. A stale `codex` on PATH must not
-    // be able to strip that model out of Codex's own cache (issue #645).
+    // strip that model or freeze future account catalog refreshes (issue #645).
     const contents = `${JSON.stringify(fixtureCache(
       [{ slug: "gpt-5.6-sol" }, { slug: "gpt-6-astra" }],
       { client_version: "0.153.4" },
     ), null, 2)}\n`;
     writeFileSync(cachePath, contents);
-    const forbidden = () => {
-      throw new Error("a downgrade must touch neither credential nor network");
-    };
+    let request;
     const result = await refreshNativeAccountCatalog({
       cachePath,
       force: true,
       version: "0.150.0",
-      headersProvider: forbidden,
+      headersProvider,
       discoveryOff: () => false,
       lock: noLock,
-      fetchImpl: forbidden,
+      fetchImpl: async (url, init) => {
+        request = { url, init };
+        return new Response(JSON.stringify({ models: [
+          { slug: "gpt-5.6-sol" },
+          { slug: "gpt-6-astra" },
+          { slug: "gpt-6.1-sol" },
+        ] }), { status: 200 });
+      },
     });
-    assert.equal(result.status, "stale-client");
-    assert.equal(readFileSync(cachePath, "utf8"), contents);
+    assert.equal(result.status, "updated");
+    assert.equal(new URL(request.url).searchParams.get("client_version"), "0.153.4");
+    assert.equal(request.init.headers["if-none-match"], undefined);
+    const written = JSON.parse(readFileSync(cachePath, "utf8"));
+    assert.equal(written.client_version, "0.153.4");
+    assert.deepEqual(written.models.map((model) => model.slug), [
+      "gpt-5.6-sol", "gpt-6-astra", "gpt-6.1-sol",
+    ]);
+  }));
+
+test("router-contaminated cache cannot supply a newer client version", () =>
+  withCache(async (cachePath) => {
+    writeFileSync(cachePath, JSON.stringify(fixtureCache(
+      [{ slug: "deepseek/deepseek-v4.1-flash" }],
+      { client_version: "0.999.0" },
+    )));
+    let requestedVersion;
+    await refreshNativeAccountCatalog({
+      cachePath,
+      force: true,
+      version: "0.153.4",
+      headersProvider,
+      discoveryOff: () => false,
+      lock: noLock,
+      fetchImpl: async (url) => {
+        requestedVersion = new URL(url).searchParams.get("client_version");
+        return new Response(JSON.stringify({ models: [{ slug: "gpt-native" }] }), { status: 200 });
+      },
+    });
+    assert.equal(requestedVersion, "0.153.4");
   }));
 
 test("an equal or newer client version still refreshes", () =>

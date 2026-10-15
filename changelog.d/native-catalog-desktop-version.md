@@ -1,0 +1,1 @@
+- **Native Codex models keep refreshing when the desktop client is newer than the standalone CLI.** The router reuses the client version recorded by Codex's uncontaminated account cache, so a stale CLI cannot freeze newly available native models.
