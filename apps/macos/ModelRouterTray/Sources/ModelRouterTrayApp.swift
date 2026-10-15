@@ -386,8 +386,20 @@ struct ModelRouterTrayApp: App {
     // MenuBarExtra(.window) re-anchors from a SwiftUI-driven status item on
     // every RouterStore publish, which parks the panel on opposite screen
     // corners. The AppDelegate owns one fixed NSStatusItem and NSPanel instead.
-    // This empty Settings scene is only here to satisfy App.
-    Settings { EmptyView() }
+    // App still needs one scene. An empty Settings scene used to fill that
+    // role, but macOS 26 opens a lone Settings scene at launch, so every login
+    // put a blank "Codex Router Settings" window on screen. A MenuBarExtra that
+    // is never inserted satisfies App without owning a window. Settings...
+    // (Command-comma) opens the Control Center on its Settings page.
+    MenuBarExtra("Codex Router", isInserted: .constant(false)) { EmptyView() }
+      .commands {
+        CommandGroup(replacing: .appSettings) {
+          Button(routerLocalized("Settings") + "…") {
+            ControlCenterLauncher.open(navigation: ControlCenterNavigationRequest(destination: .settings))
+          }
+          .keyboardShortcut(",")
+        }
+      }
   }
 }
 
@@ -785,6 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum ControlCenterDestination: String, Equatable {
   case usage
   case usageResets = "usage-resets"
+  case settings
 
 }
 
@@ -795,6 +808,15 @@ struct ControlCenterNavigationRequest: Equatable {
 
   let destination: ControlCenterDestination
   let sourceID: String?
+
+  // The tray's own Settings item asks for its page directly. Widget and other
+  // external URLs still arrive through `init?(url:)`, which accepts only the
+  // usage destinations, so a registered `codex-router://` link cannot open the
+  // Settings page.
+  init(destination: ControlCenterDestination) {
+    self.destination = destination
+    sourceID = nil
+  }
 
   init?(url: URL) {
     guard url.scheme == Self.scheme,
@@ -1117,7 +1139,9 @@ final class RouterStore: ObservableObject {
     storedCustomIconPath: String?
   ) -> MenuBarSettings {
     let custom = storedCustomIconPath.flatMap { $0.isEmpty ? nil : $0 }
-    let preset = storedPresetIcon.flatMap { $0.isEmpty ? nil : $0 } ?? "cpu"
+    let storedPreset = storedPresetIcon.flatMap { $0.isEmpty ? nil : $0 } ?? "cpu"
+    let preset = ["star", "sparkle", "seal"].contains(where: { storedPreset.contains($0) })
+      ? "cpu" : storedPreset
     return MenuBarSettings(
       displayMode: storedDisplayMode.flatMap(TrayMenuBarDisplayMode.init(rawValue:)) ?? .iconOnly,
       showModelName: storedShowModelName ?? true,
@@ -1624,6 +1648,7 @@ final class RouterStore: ObservableObject {
     "orca": "OrcaRouter",
     "venice": "Venice",
     "nousresearch": "Nous",
+    "aimlapi": "AI/ML API",
     "openrouter": "OpenRouter",
   ]
 
@@ -6614,7 +6639,7 @@ private struct TrayView: View {
           .font(.system(size: 11, weight: .medium))
           .foregroundStyle(routerMuted)
         Spacer()
-        ForEach(["cpu", "brain", "sparkles", "terminal", "bolt.horizontal.circle", "network"], id: \.self) { symbol in
+        ForEach(["cpu", "brain", "arrow.triangle.branch", "terminal", "bolt.horizontal.circle", "network"], id: \.self) { symbol in
           Button {
             store.setMenuBarPresetIcon(symbol)
           } label: {

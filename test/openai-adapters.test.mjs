@@ -244,6 +244,51 @@ test("Responses stream pins per-event response IDs to the created id (#814)", as
   assert.equal(secondCreated[1].data.code, "invalid_responses_stream");
 });
 
+test("a refused Responses stream reports its reason to the caller exactly once", async () => {
+  // The client sees the reason only inside the SSE error frame, and the
+  // gateway rewrites that frame to "Response API in-stream error" (#837). The
+  // callback is what lets the forwarder write the real reason to its log.
+  const reasons = [];
+  const changedId = frames(await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: (reason) => reasons.push(reason) }),
+    [
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_b\",\"output\":[]}}\n\n",
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_c\",\"output\":[]}}\n\n",
+    ],
+  ));
+  const refusal = changedId.find((frame) => frame.event === "error");
+  assert.equal(refusal.data.code, "invalid_responses_stream");
+  assert.deepEqual(reasons, [refusal.data.message]);
+
+  const truncated = [];
+  await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: (reason) => truncated.push(reason) }),
+    ["event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n"],
+  );
+  assert.deepEqual(truncated, ["The upstream Responses stream ended before a terminal event."]);
+
+  const clean = [];
+  await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: (reason) => clean.push(reason) }),
+    [
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_a\",\"output\":[]}}\n\n",
+    ],
+  );
+  assert.deepEqual(clean, []);
+
+  // A reporter that throws must not change what the stream emits.
+  const throwing = frames(await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: () => { throw new Error("log sink failed"); } }),
+    [
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_b\"}}\n\n",
+    ],
+  ));
+  assert.equal(throwing[1].data.code, "invalid_responses_stream");
+});
+
 test("a stream of nothing but keep-alives still reports an incomplete stream", async () => {
   // Comments are not forwarded, but they are proof the upstream was talking.
   // Swallowing them silently would turn a stream that died before its terminal
@@ -287,6 +332,30 @@ test("Responses JSON transform preserves usage and error-shaped payloads", async
   assert.deepEqual(JSON.parse(await transformText(createResponsesJsonTransform(), [JSON.stringify(response)])), response);
   const errorPayload = { error: { type: "invalid_request_error", message: "bad" } };
   assert.deepEqual(JSON.parse(await transformText(createResponsesJsonTransform(), [JSON.stringify(errorPayload)])), errorPayload);
+});
+
+test("Responses JSON transform preserves Unicode across every byte split", async () => {
+  const response = {
+    id: "resp-unicode",
+    output: [
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "Çağrı: 你好 🙂" }] },
+      { type: "function_call", call_id: "call-unicode", name: "collaboration__send_message", arguments: '{"message":"İşlem tamamlandı 日本語 🚀"}' },
+    ],
+    usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 },
+    metadata: { label: "résumé" },
+  };
+  const lookup = new Map([["collaboration__send_message", { namespace: "collaboration", name: "send_message" }]]);
+  const expected = {
+    ...response,
+    output: [response.output[0], { ...response.output[1], name: "send_message", namespace: "collaboration" }],
+  };
+  const bytes = Buffer.from(JSON.stringify(response), "utf8");
+  for (let split = 1; split < bytes.length; split += 1) {
+    const result = await transformText(createResponsesJsonTransform(lookup), [bytes.subarray(0, split), bytes.subarray(split)]);
+    assert.deepEqual(JSON.parse(result), expected, `byte split ${split}`);
+  }
+  const oneByteChunks = Array.from(bytes, (byte) => Buffer.from([byte]));
+  assert.deepEqual(JSON.parse(await transformText(createResponsesJsonTransform(lookup), oneByteChunks)), expected);
 });
 
 test("Responses JSON transform rejects malformed and invalid upstream bodies", async () => {

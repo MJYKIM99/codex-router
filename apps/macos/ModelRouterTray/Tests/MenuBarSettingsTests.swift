@@ -163,14 +163,27 @@ struct MenuBarSettingsTests {
       storedDisplayMode: "iconOnly",
       storedShowModelName: false,
       storedIconStyle: raw,
-      storedPresetIcon: "sparkles",
+      storedPresetIcon: "arrow.triangle.branch",
       storedCustomIconPath: "/tmp/icon.png"
     )
     #expect(settings.iconStyle == expected)
     #expect(settings.displayMode == .iconOnly)
     #expect(settings.showModelName == false)
-    #expect(settings.presetIcon == "sparkles")
+    #expect(settings.presetIcon == "arrow.triangle.branch")
     #expect(settings.customIconPath == "/tmp/icon.png")
+  }
+
+  @Test("legacy star-shaped presets fall back to the CPU icon", arguments: ["star", "star.fill", "sparkles", "checkmark.seal.fill"])
+  func legacyStarPresetsFallBack(symbol: String) {
+    let settings = RouterStore.resolveMenuBarSettings(
+      storedDisplayMode: nil,
+      storedShowModelName: nil,
+      storedIconStyle: "preset",
+      storedPresetIcon: symbol,
+      storedCustomIconPath: nil
+    )
+    #expect(settings.iconStyle == .preset)
+    #expect(settings.presetIcon == "cpu")
   }
 
   @Test("an unreadable stored value falls through rather than crashing")

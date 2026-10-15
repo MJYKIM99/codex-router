@@ -1,0 +1,1 @@
+- **Menu bar presets use a routing symbol instead of star-shaped artwork.** Existing star, sparkle, and seal preset choices fall back to the CPU icon; other saved icon settings remain unchanged.

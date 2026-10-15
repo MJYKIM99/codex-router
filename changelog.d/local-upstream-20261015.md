@@ -1,0 +1,1 @@
+- **Local integration keeps ChatGPT Web and desktop catalog improvements while adopting upstream through `7912aa34`.** Retain the account-bound browser bridge, its reviewed 6.1.0/6.1.1 capability contracts, and native catalog refresh at the newer desktop client version alongside the upstream WebSocket interruption fix.
